@@ -263,6 +263,6 @@ if __name__ == '__main__':
     np.random.seed(1234)
 
     if not os.path.isdir(os.path.join('checkpoints', args.name)):
-        os.mkdir(os.path.join('checkpoints', args.name))
+        os.makedirs(os.path.join('checkpoints', args.name), exist_ok=True)
 
     train(args)
