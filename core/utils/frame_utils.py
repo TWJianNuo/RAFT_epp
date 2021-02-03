@@ -1,9 +1,10 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFile
 from os.path import *
 import re
 
 import cv2
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
 
@@ -139,11 +140,12 @@ def read_gen(file_name, pil=False):
 def readFlowVRKitti(filename):
     # “Convert from .png to (h, w, 2) (flow_x, flow_y) float32 array”
     # read png to bgr in 16 bit unsigned short
-    try:
-        bgr = cv2.imread(filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
-        h, w, _c = bgr.shape
-    except:
-        a = 1
+
+    bgr = cv2.imread(filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+    # rgb = np.array(Image.open(filename)).astype(np.uint16)
+    # bgr = np.stack([rgb[:, :, 2], rgb[:, :, 1], rgb[:, :, 0]], axis=2)
+    h, w, _c = bgr.shape
+
     assert bgr.dtype == np.uint16 and _c == 3
 
     # b == invalid flow flag == 0 for sky or other invalid flow

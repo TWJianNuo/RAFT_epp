@@ -223,7 +223,7 @@ def train(args):
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
     train_dataset = KITTI_eval(aug_params, split='training', root=args.dataset_root)
 
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False, shuffle=True, num_workers=4, drop_last=True)
+    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False, shuffle=True, num_workers=args.num_workers, drop_last=True)
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
@@ -309,6 +309,7 @@ if __name__ == '__main__':
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--logroot', type=str)
+    parser.add_argument('--num_workers', type=int, default=12)
 
     args = parser.parse_args()
 

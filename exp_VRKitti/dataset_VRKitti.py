@@ -104,39 +104,42 @@ class FlowDataset(data.Dataset):
 
 
 class VirtualKITTI2(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='datasets/KITTI'):
+    def __init__(self, aug_params=None, split='training', root='datasets/KITTI', entries=None):
         super(VirtualKITTI2, self).__init__(aug_params, sparse=False)
         if split == 'testing':
             self.is_test = True
         self.root = root
         self.split = split
+        self.entries = entries
         self.get_img_lists()
 
     def get_img_lists(self):
-        if self.split == 'evaluation':
-            sceneids = [2]
-            conds = ['morning']
-        elif self.split == 'training':
-            sceneids = [1, 6, 18, 20]
-            conds = ['morning', 'sunset']
-
-        img_lists = list()
-        for k in sceneids:
-            for c in conds:
-                pngs = glob(os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'forwardFlow', 'Camera_0', "*.png"))
-                list.sort(pngs)
-                for png in pngs:
-                    pngidx = int(png.split('/')[-1].split('.')[-2].split('_')[-1])
-                    img_lists.append([k, c, pngidx])
+        # if self.split == 'evaluation':
+        #     sceneids = [2]
+        #     conds = ['morning']
+        # elif self.split == 'training':
+        #     sceneids = [1, 6, 18, 20]
+        #     conds = ['morning', 'sunset']
+        #
+        # img_lists = list()
+        # for k in sceneids:
+        #     for c in conds:
+        #         pngs = glob(os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'forwardFlow', 'Camera_0', "*.png"))
+        #         list.sort(pngs)
+        #         for png in pngs:
+        #             pngidx = int(png.split('/')[-1].split('.')[-2].split('_')[-1])
+        #             img_lists.append([k, c, pngidx])
 
         self.flow_list = []
         self.image_list = []
 
-        for k, c, pngidx in img_lists:
+        for entry in self.entries:
+            k, c, pngidx = entry.split(' ')
+            k = int(k)
+            pngidx = int(pngidx)
             flowimg_path = os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'forwardFlow', 'Camera_0', "flow_{}.png".format(str(pngidx).zfill(5)))
             rgb_path1 = os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'rgb', 'Camera_0', "rgb_{}.jpg".format(str(pngidx).zfill(5)))
             rgb_path2 = os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'rgb', 'Camera_0', "rgb_{}.jpg".format(str(pngidx + 1).zfill(5)))
 
-            if os.path.exists(flowimg_path) and os.path.exists(rgb_path1) and os.path.exists(rgb_path2):
-                self.flow_list.append(flowimg_path)
-                self.image_list.append([rgb_path1, rgb_path2])
+            self.flow_list.append(flowimg_path)
+            self.image_list.append([rgb_path1, rgb_path2])
