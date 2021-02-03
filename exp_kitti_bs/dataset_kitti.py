@@ -1,6 +1,8 @@
 from __future__ import print_function, division
-import sys
-sys.path.append('../core')
+import os, sys, inspect
+project_rootdir = os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))))
+sys.path.insert(0, project_rootdir)
+sys.path.append('core')
 
 import numpy as np
 import torch
@@ -13,8 +15,6 @@ import random
 from glob import glob
 import os.path as osp
 
-from utils import frame_utils
-from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
 from core.datasets import FlowDataset
 
 class KITTI_eval(FlowDataset):

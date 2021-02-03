@@ -1,7 +1,8 @@
 from __future__ import print_function, division
-import sys
-
-sys.path.append('../core')
+import os, sys, inspect
+project_rootdir = os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))))
+sys.path.insert(0, project_rootdir)
+sys.path.append('core')
 
 import argparse
 import os
@@ -16,15 +17,14 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from raft import RAFT
-import evaluate
 from exp_kitti_bs.dataset_kitti import KITTI_eval
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
 import PIL.Image as Image
 from core.utils.flow_viz import flow_to_image
-from utils.utils import InputPadder, forward_interpolate
+from core.raft import RAFT
+from core.utils.utils import InputPadder, forward_interpolate
 
 try:
     from torch.cuda.amp import GradScaler
