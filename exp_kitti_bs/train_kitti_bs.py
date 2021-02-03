@@ -159,11 +159,11 @@ class Logger:
 
         self.writer.add_image('img_vls', (torch.from_numpy(img_vls).float() / 255).permute([2, 0, 1]), self.total_steps)
 
-    def write_dict(self, results):
+    def write_dict(self, results, step):
         self.create_summarywriter()
 
         for key in results:
-            self.writer.add_scalar(key, results[key], self.total_steps)
+            self.writer.add_scalar(key, results[key], step)
 
     def close(self):
         self.writer.close()
@@ -266,7 +266,7 @@ def train(args):
                 results = {}
                 results.update(validate_kitti(model.module, args))
 
-                logger_evaluation.write_dict(results)
+                logger_evaluation.write_dict(results, total_steps)
 
                 model.train()
                 if args.stage != 'chairs':
