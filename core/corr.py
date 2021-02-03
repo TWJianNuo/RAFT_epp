@@ -20,7 +20,7 @@ class CorrBlock:
 
         batch, h1, w1, dim, h2, w2 = corr.shape
         corr = corr.reshape(batch*h1*w1, dim, h2, w2)
-        
+
         self.corr_pyramid.append(corr)
         for i in range(self.num_levels-1):
             corr = F.avg_pool2d(corr, 2, stride=2)
@@ -47,6 +47,7 @@ class CorrBlock:
             out_pyramid.append(corr)
 
         out = torch.cat(out_pyramid, dim=-1)
+
         return out.permute(0, 3, 1, 2).contiguous().float()
 
     @staticmethod

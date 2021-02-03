@@ -176,7 +176,6 @@ class KITTI(FlowDataset):
         if split == 'training':
             self.flow_list = sorted(glob(osp.join(root, 'flow_occ/*_10.png')))
 
-
 class HD1K(FlowDataset):
     def __init__(self, aug_params=None, root='datasets/HD1k'):
         super(HD1K, self).__init__(aug_params, sparse=True)
@@ -225,7 +224,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
-        train_dataset = KITTI(aug_params, split='training', root=args.kitti_flow15_root)
+        train_dataset = KITTI(aug_params, split='training', root=args.dataset_root)
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
         pin_memory=False, shuffle=True, num_workers=4, drop_last=True)

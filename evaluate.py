@@ -439,7 +439,7 @@ def validate_kitti_customized(model, iters=24):
 def validate_kitti(model, args, iters=24):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
-    val_dataset = datasets.KITTI(split='training', root=args.kitti_flow15_root)
+    val_dataset = datasets.KITTI(split='training', root=args.dataset_root)
 
     out_list, epe_list = [], []
     for val_id in range(len(val_dataset)):

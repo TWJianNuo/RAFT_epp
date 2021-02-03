@@ -135,3 +135,20 @@ def read_gen(file_name, pil=False):
         else:
             return flow[:, :, :-1]
     return []
+
+def readFlowVRKitti(filename):
+    # “Convert from .png to (h, w, 2) (flow_x, flow_y) float32 array”
+    # read png to bgr in 16 bit unsigned short
+
+    bgr = cv2.imread(filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+    h, w, _c = bgr.shape
+    assert bgr.dtype == np.uint16 and _c == 3
+
+    # b == invalid flow flag == 0 for sky or other invalid flow
+    invalid = bgr[..., 0] == 0
+    # g,r == flow_y,x normalized by height,width and scaled to [0;2**16 – 1]
+    out_flow = 2.0 / (2**16 - 1.0) * bgr[..., 2:0:-1].astype('f4') - 1
+    out_flow[..., 0] *= w - 1
+    out_flow[..., 1] *= h - 1
+    out_flow[invalid] = 0 # or another value (e.g., np.nan)
+    return out_flow, invalid
