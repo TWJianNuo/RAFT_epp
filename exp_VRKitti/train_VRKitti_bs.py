@@ -305,7 +305,7 @@ def train(gpu, ngpus_per_node, args):
 
     if args.gpu == 0:
         logger = Logger(model, scheduler, logroot)
-        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation', args.name))
+        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_VRKitti', args.name))
 
     VAL_FREQ = 5000
     add_noise = True
