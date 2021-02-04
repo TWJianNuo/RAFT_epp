@@ -272,7 +272,7 @@ def train(gpu, ngpus_per_node, args):
 
     eval_dataset = KITTI_eval(split='evaluation', root=args.dataset_root)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=eval_sampler)
 
@@ -293,6 +293,7 @@ def train(gpu, ngpus_per_node, args):
     epoch = 0
 
     should_keep_training = True
+    validate_kitti(model.module, args, eval_loader, group)
     while should_keep_training:
 
         train_sampler.set_epoch(epoch)
