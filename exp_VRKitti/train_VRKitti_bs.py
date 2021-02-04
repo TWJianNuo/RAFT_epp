@@ -25,7 +25,6 @@ import PIL.Image as Image
 from core.utils.flow_viz import flow_to_image
 from core.raft import RAFT
 from core.utils.utils import InputPadder, forward_interpolate
-
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.autograd import Variable
@@ -33,7 +32,6 @@ from torch.autograd import Variable
 from tqdm import tqdm
 
 from core.utils.utils import tensor2disp
-
 try:
     from torch.cuda.amp import GradScaler
 except:
@@ -157,7 +155,7 @@ class Logger:
         pixelloc[1, :, :] = ((pixelloc[1, :, :] / h) - 0.5) * 2
         pixelloc = pixelloc.permute([1, 2, 0])
 
-        image1_recon = torch.nn.functional.grid_sample(image2[0, :, :, :].unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
+        image1_recon = torch.nn.functional.grid_sample(image2[0, :, :, :].detach().unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
         image1_recon = image1_recon[0].permute([1, 2, 0]).numpy().astype(np.uint8)
 
         pixelloc = np.stack([xx, yy], axis=0)
@@ -166,7 +164,7 @@ class Logger:
         pixelloc[1, :, :] = ((pixelloc[1, :, :] / h) - 0.5) * 2
         pixelloc = pixelloc.permute([1, 2, 0])
 
-        image1_recon_gt = torch.nn.functional.grid_sample(image2[0, :, :, :].unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
+        image1_recon_gt = torch.nn.functional.grid_sample(image2[0, :, :, :].detach().unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
         image1_recon_gt = image1_recon_gt[0].permute([1, 2, 0]).numpy().astype(np.uint8)
 
         figvalid = np.array(tensor2disp(valid[0].unsqueeze(0).unsqueeze(0).float(), vmax=1, viewind=0))
@@ -189,22 +187,34 @@ class Logger:
         self.writer.close()
 
 @torch.no_grad()
-def validate_VRKitti2(model, args, iters=24, entries=None):
+def validate_VRKitti2(model, args, eval_loader, group, iters=24):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
-    val_dataset = VirtualKITTI2(split='evaluation', root=args.dataset_root, entries=entries)
+    epe_list = torch.zeros(2).cuda(device=args.gpu)
+    out_list = torch.zeros(2).cuda(device=args.gpu)
 
-    out_list, epe_list = [], []
-    for val_id in range(len(val_dataset)):
-        image1, image2, flow_gt, valid_gt = val_dataset[val_id]
-        image1 = image1[None].cuda()
-        image2 = image2[None].cuda()
+    for val_id, batch in enumerate(tqdm(eval_loader)):
+        image1, image2, flow_gt, valid_gt = batch
+
+        image1 = Variable(image1, requires_grad=True)
+        image1 = image1.cuda(args.gpu, non_blocking=True)
+
+        image2 = Variable(image2, requires_grad=True)
+        image2 = image2.cuda(args.gpu, non_blocking=True)
+
+        flow_gt = Variable(flow_gt, requires_grad=True)
+        flow_gt = flow_gt.cuda(args.gpu, non_blocking=True)
+        flow_gt = flow_gt[0]
+
+        valid_gt = Variable(valid_gt, requires_grad=True)
+        valid_gt = valid_gt.cuda(args.gpu, non_blocking=True)
+        valid_gt = valid_gt[0]
 
         padder = InputPadder(image1.shape, mode='kitti')
         image1, image2 = padder.pad(image1, image2)
 
         flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
-        flow = padder.unpad(flow_pr[0]).cpu()
+        flow = padder.unpad(flow_pr[0])
 
         epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
         mag = torch.sum(flow_gt**2, dim=0).sqrt()
@@ -214,17 +224,25 @@ def validate_VRKitti2(model, args, iters=24, entries=None):
         val = valid_gt.view(-1) >= 0.5
 
         out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
-        epe_list.append(epe[val].mean().item())
-        out_list.append(out[val].cpu().numpy())
 
-    epe_list = np.array(epe_list)
-    out_list = np.concatenate(out_list)
+        epe_list[0] += epe[val].mean().item()
+        epe_list[1] += 1
 
-    epe = np.mean(epe_list)
-    f1 = 100 * np.mean(out_list)
+        out_list[0] += out[val].sum()
+        out_list[1] += torch.sum(val)
 
-    print("Validation KITTI: %f, %f" % (epe, f1))
-    return {'kitti-epe': epe, 'kitti-f1': f1}
+    if args.distributed:
+        dist.all_reduce(tensor=epe_list, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(tensor=out_list, op=dist.ReduceOp.SUM, group=group)
+
+    if args.gpu == 0:
+        epe = epe_list[0] / epe_list[1]
+        f1 = 100 * out_list[0] / out_list[1]
+
+        print("Validation KITTI: %f, %f" % (epe, f1))
+        return {'kitti-epe': float(epe.detach().cpu().numpy()), 'kitti-f1': float(f1.detach().cpu().numpy())}
+    else:
+        return None
 
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_VRKitti', 'splits')
@@ -271,7 +289,7 @@ def train(gpu, ngpus_per_node, args):
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
 
-    eval_dataset = VirtualKITTI2(split='evaluation', root=args.dataset_root)
+    eval_dataset = VirtualKITTI2(split='evaluation', root=args.dataset_root, entries=evaluation_entries)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
@@ -291,18 +309,31 @@ def train(gpu, ngpus_per_node, args):
 
     VAL_FREQ = 5000
     add_noise = True
+    epoch = 0
 
     should_keep_training = True
     while should_keep_training:
 
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, flow, valid = data_blob
+
+            image1 = Variable(image1, requires_grad=True)
+            image1 = image1.cuda(gpu, non_blocking=True)
+
+            image2 = Variable(image2, requires_grad=True)
+            image2 = image2.cuda(gpu, non_blocking=True)
+
+            flow = Variable(flow, requires_grad=True)
+            flow = flow.cuda(gpu, non_blocking=True)
+
+            valid = Variable(valid, requires_grad=True)
+            valid = valid.cuda(gpu, non_blocking=True)
 
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
-                image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
-                image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
+                image1 = (image1 + stdv * torch.randn(*image1.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
+                image2 = (image2 + stdv * torch.randn(*image2.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
 
             flow_predictions = model(image1, image2, iters=args.iters)
 
@@ -315,30 +346,33 @@ def train(gpu, ngpus_per_node, args):
             scheduler.step()
             scaler.update()
 
-            logger.push(metrics, image1, image2, flow, flow_predictions, valid)
+            if args.gpu == 0:
+                logger.push(metrics, image1, image2, flow, flow_predictions, valid)
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
-                PATH = os.path.join(logroot, '%s.pth' % (str(total_steps + 1).zfill(3)))
-                torch.save(model.state_dict(), PATH)
 
-                results = {}
-                results.update(validate_VRKitti2(model.module, args, evaluation_entries))
-
-                logger_evaluation.write_dict(results, total_steps)
+                results = validate_VRKitti2(model.module, args, eval_loader, group)
 
                 model.train()
                 if args.stage != 'chairs':
                     model.module.freeze_bn()
+
+                if args.gpu == 0:
+                    logger_evaluation.write_dict(results, total_steps)
+                    PATH = os.path.join(logroot, '%s.pth' % (str(total_steps + 1).zfill(3)))
+                    torch.save(model.state_dict(), PATH)
 
             total_steps += 1
 
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
+        epoch = epoch + 1
 
-    logger.close()
-    PATH = os.path.join(logroot, 'final.pth')
-    torch.save(model.state_dict(), PATH)
+    if args.gpu == 0:
+        logger.close()
+        PATH = os.path.join(logroot, 'final.pth')
+        torch.save(model.state_dict(), PATH)
 
     return PATH
 
@@ -369,6 +403,10 @@ if __name__ == '__main__':
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
+    parser.add_argument('--distributed', default=True, type=bool)
+    parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1234')
+    parser.add_argument('--dist_backend', type=str, help='distributed backend', default='nccl')
+
     args = parser.parse_args()
 
     torch.manual_seed(1234)
@@ -378,5 +416,12 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
     os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
 
+    torch.cuda.empty_cache()
 
-    train(args)
+    ngpus_per_node = torch.cuda.device_count()
+
+    if args.distributed:
+        args.world_size = ngpus_per_node
+        mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+    else:
+        train(args.gpu, ngpus_per_node, args)
