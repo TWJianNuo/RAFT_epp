@@ -26,6 +26,12 @@ from core.utils.flow_viz import flow_to_image
 from core.raft import RAFT
 from core.utils.utils import InputPadder, forward_interpolate
 
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.autograd import Variable
+
+from tqdm import tqdm
+
 from core.utils.utils import tensor2disp
 
 try:
@@ -50,8 +56,7 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-# SUM_FREQ = 100
-SUM_FREQ = 10
+SUM_FREQ = 100
 VAL_FREQ = 5000
 
 
@@ -227,15 +232,32 @@ def read_splits():
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'evaluation_split.txt'), 'r')]
     return train_entries, evaluation_entries
 
-def train(args):
-    model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
+def train(gpu, ngpus_per_node, args):
+    print("Using GPU %d for training" % gpu)
+    args.gpu = gpu
+
+    if args.distributed:
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url, world_size=ngpus_per_node, rank=args.gpu)
+
+    model = RAFT(args)
+    if args.distributed:
+        torch.cuda.set_device(args.gpu)
+        args.batch_size = int(args.batch_size / ngpus_per_node)
+        model = nn.SyncBatchNorm.convert_sync_batchnorm(module=model)
+        model = model.to(f'cuda:{args.gpu}')
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True, output_device=args.gpu)
+    else:
+        model = torch.nn.DataParallel(model)
+        model.cuda()
     logroot = os.path.join(args.logroot, args.name)
     print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
 
     if args.restore_ckpt is not None:
-        model.load_state_dict(torch.load(args.restore_ckpt), strict=False)
+        print("=> loading checkpoint '{}'".format(args.restore_ckpt))
+        loc = 'cuda:{}'.format(args.gpu)
+        checkpoint = torch.load(args.restore_ckpt, map_location=loc)
+        model.load_state_dict(checkpoint, strict=False)
 
-    model.cuda()
     model.train()
 
     if args.stage != 'chairs':
@@ -244,14 +266,28 @@ def train(args):
     train_entries, evaluation_entries = read_splits()
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
     train_dataset = VirtualKITTI2(aug_params, split='training', root=args.dataset_root, entries=train_entries)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
+    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
+                                   shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   sampler=train_sampler)
 
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False, shuffle=True, num_workers=args.num_workers, drop_last=True)
+    eval_dataset = VirtualKITTI2(split='evaluation', root=args.dataset_root)
+    eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
+    eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
+                                   shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   sampler=eval_sampler)
+
+    if args.distributed:
+        group = dist.new_group([i for i in range(ngpus_per_node)])
+
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
     scaler = GradScaler(enabled=args.mixed_precision)
-    logger = Logger(model, scheduler, logroot)
-    logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation', args.name))
+
+    if args.gpu == 0:
+        logger = Logger(model, scheduler, logroot)
+        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation', args.name))
 
     VAL_FREQ = 5000
     add_noise = True
