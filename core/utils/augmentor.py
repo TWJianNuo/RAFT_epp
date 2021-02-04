@@ -150,7 +150,6 @@ class SparseFlowAugmentor:
     def eraser_transform(self, img1, img2):
         ht, wd = img1.shape[:2]
         if np.random.rand() < self.eraser_aug_prob:
-            print("eraser transform applied")
             mean_color = np.mean(img2.reshape(-1, 3), axis=0)
             for _ in range(np.random.randint(1, 3)):
                 x0 = np.random.randint(0, wd)
