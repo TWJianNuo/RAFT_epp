@@ -293,7 +293,6 @@ def train(gpu, ngpus_per_node, args):
     epoch = 0
 
     should_keep_training = True
-    validate_kitti(model.module, args, eval_loader, group)
     while should_keep_training:
 
         train_sampler.set_epoch(epoch)
