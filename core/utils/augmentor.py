@@ -110,7 +110,7 @@ class FlowAugmentor:
         return img1, img2, flow
 
     def __call__(self, img1, img2, flow):
-        np.random.seed(time.time())
+        np.random.seed(int(time.time()))
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
         img1, img2, flow = self.spatial_transform(img1, img2, flow)
@@ -236,7 +236,7 @@ class SparseFlowAugmentor:
 
 
     def __call__(self, img1, img2, flow, valid):
-        np.random.seed(time.time())
+        np.random.seed(int(time.time()))
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
         img1, img2, flow, valid = self.spatial_transform(img1, img2, flow, valid)
