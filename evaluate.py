@@ -500,6 +500,6 @@ if __name__ == '__main__':
             validate_sintel(model.module)
 
         elif args.dataset == 'kitti':
-            validate_kitti(model.module)
+            validate_kitti_customized(model.module)
 
 

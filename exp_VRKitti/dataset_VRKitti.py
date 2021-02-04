@@ -114,22 +114,6 @@ class VirtualKITTI2(FlowDataset):
         self.get_img_lists()
 
     def get_img_lists(self):
-        # if self.split == 'evaluation':
-        #     sceneids = [2]
-        #     conds = ['morning']
-        # elif self.split == 'training':
-        #     sceneids = [1, 6, 18, 20]
-        #     conds = ['morning', 'sunset']
-        #
-        # img_lists = list()
-        # for k in sceneids:
-        #     for c in conds:
-        #         pngs = glob(os.path.join(self.root, "Scene{}".format(str(k).zfill(2)), c, 'frames', 'forwardFlow', 'Camera_0', "*.png"))
-        #         list.sort(pngs)
-        #         for png in pngs:
-        #             pngidx = int(png.split('/')[-1].split('.')[-2].split('_')[-1])
-        #             img_lists.append([k, c, pngidx])
-
         self.flow_list = []
         self.image_list = []
 

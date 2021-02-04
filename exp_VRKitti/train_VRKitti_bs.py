@@ -50,7 +50,8 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 100
+# SUM_FREQ = 100
+SUM_FREQ = 10
 VAL_FREQ = 5000
 
 
@@ -340,5 +341,6 @@ if __name__ == '__main__':
     if not os.path.isdir(os.path.join(args.logroot, args.name)):
         os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
     os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
+
 
     train(args)

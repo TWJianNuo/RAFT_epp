@@ -25,6 +25,11 @@ import PIL.Image as Image
 from core.utils.flow_viz import flow_to_image
 from core.raft import RAFT
 from core.utils.utils import InputPadder, forward_interpolate
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.autograd import Variable
+
+from tqdm import tqdm
 
 try:
     from torch.cuda.amp import GradScaler
@@ -48,7 +53,8 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 100
+# SUM_FREQ = 100
+SUM_FREQ = 10
 VAL_FREQ = 5000
 
 
@@ -149,7 +155,7 @@ class Logger:
         pixelloc[1, :, :] = ((pixelloc[1, :, :] / h) - 0.5) * 2
         pixelloc = pixelloc.permute([1, 2, 0])
 
-        image1_recon = torch.nn.functional.grid_sample(image2[0, :, :, :].unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
+        image1_recon = torch.nn.functional.grid_sample(image2[0, :, :, :].detach().unsqueeze(0).cpu(), pixelloc.unsqueeze(0), mode='bilinear', align_corners=False)
         image1_recon = image1_recon[0].permute([1, 2, 0]).numpy().astype(np.uint8)
 
         img_up = np.concatenate([img1, img2], axis=1)
@@ -169,22 +175,34 @@ class Logger:
         self.writer.close()
 
 @torch.no_grad()
-def validate_kitti(model, args, iters=24):
+def validate_kitti(model, args, eval_loader, group, iters=24):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
-    val_dataset = KITTI_eval(split='evaluation', root=args.dataset_root)
+    epe_list = torch.zeros(2).cuda(device=args.gpu)
+    out_list = torch.zeros(2).cuda(device=args.gpu)
 
-    out_list, epe_list = [], []
-    for val_id in range(len(val_dataset)):
-        image1, image2, flow_gt, valid_gt = val_dataset[val_id]
-        image1 = image1[None].cuda()
-        image2 = image2[None].cuda()
+    for val_id, batch in enumerate(tqdm(eval_loader)):
+        image1, image2, flow_gt, valid_gt = batch
+
+        image1 = Variable(image1, requires_grad=True)
+        image1 = image1.cuda(args.gpu, non_blocking=True)
+
+        image2 = Variable(image2, requires_grad=True)
+        image2 = image2.cuda(args.gpu, non_blocking=True)
+
+        flow_gt = Variable(flow_gt, requires_grad=True)
+        flow_gt = flow_gt.cuda(args.gpu, non_blocking=True)
+        flow_gt = flow_gt[0]
+
+        valid_gt = Variable(valid_gt, requires_grad=True)
+        valid_gt = valid_gt.cuda(args.gpu, non_blocking=True)
+        valid_gt = valid_gt[0]
 
         padder = InputPadder(image1.shape, mode='kitti')
         image1, image2 = padder.pad(image1, image2)
 
         flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
-        flow = padder.unpad(flow_pr[0]).cpu()
+        flow = padder.unpad(flow_pr[0])
 
         epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
         mag = torch.sum(flow_gt**2, dim=0).sqrt()
@@ -194,27 +212,53 @@ def validate_kitti(model, args, iters=24):
         val = valid_gt.view(-1) >= 0.5
 
         out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
-        epe_list.append(epe[val].mean().item())
-        out_list.append(out[val].cpu().numpy())
 
-    epe_list = np.array(epe_list)
-    out_list = np.concatenate(out_list)
+        epe_list[0] += epe[val].mean().item()
+        epe_list[1] += 1
 
-    epe = np.mean(epe_list)
-    f1 = 100 * np.mean(out_list)
+        out_list[0] += out[val].sum()
+        out_list[1] += torch.sum(val)
 
-    print("Validation KITTI: %f, %f" % (epe, f1))
-    return {'kitti-epe': epe, 'kitti-f1': f1}
+    if args.distributed:
+        dist.all_reduce(tensor=epe_list, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(tensor=out_list, op=dist.ReduceOp.SUM, group=group)
 
-def train(args):
-    model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
+    if args.gpu == 0:
+        epe = epe_list[0] / epe_list[1]
+        f1 = 100 * out_list[0] / out_list[1]
+
+        print("Validation KITTI: %f, %f" % (epe, f1))
+        return {'kitti-epe': float(epe.detach().cpu().numpy()), 'kitti-f1': float(f1.detach().cpu().numpy())}
+    else:
+        return None
+
+def train(gpu, ngpus_per_node, args):
+    print("Using GPU %d for training" % gpu)
+    args.gpu = gpu
+
+    if args.distributed:
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url, world_size=ngpus_per_node, rank=args.gpu)
+
+    model = RAFT(args)
+    if args.distributed:
+        torch.cuda.set_device(args.gpu)
+        args.batch_size = int(args.batch_size / ngpus_per_node)
+        model = nn.SyncBatchNorm.convert_sync_batchnorm(module=model)
+        model = model.to(f'cuda:{args.gpu}')
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True, output_device=args.gpu)
+    else:
+        model = torch.nn.DataParallel(model)
+        model.cuda()
+
     logroot = os.path.join(args.logroot, args.name)
     print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
 
     if args.restore_ckpt is not None:
-        model.load_state_dict(torch.load(args.restore_ckpt), strict=False)
+        print("=> loading checkpoint '{}'".format(args.restore_ckpt))
+        loc = 'cuda:{}'.format(args.gpu)
+        checkpoint = torch.load(args.restore_ckpt, map_location=loc)
+        model.load_state_dict(checkpoint, strict=False)
 
-    model.cuda()
     model.train()
 
     if args.stage != 'chairs':
@@ -222,29 +266,57 @@ def train(args):
 
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
     train_dataset = KITTI_eval(aug_params, split='training', root=args.dataset_root)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
+    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
+                                   shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   sampler=train_sampler)
 
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False, shuffle=True, num_workers=args.num_workers, drop_last=True)
+    eval_dataset = KITTI_eval(split='evaluation', root=args.dataset_root)
+    eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
+    eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
+                                   shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   sampler=eval_sampler)
+
+    if args.distributed:
+        group = dist.new_group([i for i in range(ngpus_per_node)])
+
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
     scaler = GradScaler(enabled=args.mixed_precision)
-    logger = Logger(model, scheduler, logroot)
-    logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation', args.name))
+
+    if args.gpu == 0:
+        logger = Logger(model, scheduler, logroot)
+        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation', args.name))
 
     VAL_FREQ = 5000
     add_noise = True
+    epoch = 0
 
     should_keep_training = True
     while should_keep_training:
 
+        train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, flow, valid = data_blob
+
+            image1 = Variable(image1, requires_grad=True)
+            image1 = image1.cuda(gpu, non_blocking=True)
+
+            image2 = Variable(image2, requires_grad=True)
+            image2 = image2.cuda(gpu, non_blocking=True)
+
+            flow = Variable(flow, requires_grad=True)
+            flow = flow.cuda(gpu, non_blocking=True)
+
+            valid = Variable(valid, requires_grad=True)
+            valid = valid.cuda(gpu, non_blocking=True)
 
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
-                image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
-                image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
+                image1 = (image1 + stdv * torch.randn(*image1.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
+                image2 = (image2 + stdv * torch.randn(*image2.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
 
             flow_predictions = model(image1, image2, iters=args.iters)
 
@@ -257,30 +329,33 @@ def train(args):
             scheduler.step()
             scaler.update()
 
-            logger.push(metrics, image1, image2, flow, flow_predictions)
+            if args.gpu == 0:
+                logger.push(metrics, image1, image2, flow, flow_predictions)
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
-                PATH = os.path.join(logroot, '%s.pth' % (str(total_steps + 1).zfill(3)))
-                torch.save(model.state_dict(), PATH)
 
-                results = {}
-                results.update(validate_kitti(model.module, args))
-
-                logger_evaluation.write_dict(results, total_steps)
+                results = validate_kitti(model.module, args, eval_loader, group)
 
                 model.train()
                 if args.stage != 'chairs':
                     model.module.freeze_bn()
+
+                if args.gpu == 0:
+                    logger_evaluation.write_dict(results, total_steps)
+                    PATH = os.path.join(logroot, '%s.pth' % (str(total_steps + 1).zfill(3)))
+                    torch.save(model.state_dict(), PATH)
 
             total_steps += 1
 
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
+        epoch = epoch + 1
 
-    logger.close()
-    PATH = os.path.join(logroot, 'final.pth')
-    torch.save(model.state_dict(), PATH)
+    if args.gpu == 0:
+        logger.close()
+        PATH = os.path.join(logroot, 'final.pth')
+        torch.save(model.state_dict(), PATH)
 
     return PATH
 
@@ -311,6 +386,10 @@ if __name__ == '__main__':
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
+    parser.add_argument('--distributed', default=True, type=bool)
+    parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1234')
+    parser.add_argument('--dist_backend', type=str, help='distributed backend', default='nccl')
+
     args = parser.parse_args()
 
     torch.manual_seed(1234)
@@ -320,4 +399,12 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
     os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
 
-    train(args)
+    torch.cuda.empty_cache()
+
+    ngpus_per_node = torch.cuda.device_count()
+
+    if args.distributed:
+        args.world_size = ngpus_per_node
+        mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+    else:
+        train(args.gpu, ngpus_per_node, args)
