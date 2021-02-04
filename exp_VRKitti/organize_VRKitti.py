@@ -2,7 +2,9 @@ import os
 import glob
 import shutil
 import PIL.Image as Image
+import cv2
 from distutils.dir_util import copy_tree
+import numpy as np
 
 virtualkitti_root = '/media/shengjie/disk1/data/virtual_kitti'
 export_root = '/media/shengjie/disk1/data/virtual_kitti_organized'
