@@ -58,6 +58,8 @@ for split in ['evaluation', 'training']:
 
         valid_img_lists.append("{} {} {}\n".format(k, c, pngidx))
 
+    import random
+    random.shuffle(valid_img_lists)
     with open(os.path.join(split_root, '{}_split.txt'.format(split)), "w") as text_file:
         for s in valid_img_lists:
             text_file.write(s)
