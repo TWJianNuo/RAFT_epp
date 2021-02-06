@@ -17,7 +17,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from exp_kitti_bs.dataset_kitti import KITTI_eval
+from exp_kitti_eigen.dataset_kitti_eigen import KITTI_eigen
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -53,11 +53,12 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 100
+# SUM_FREQ = 100
+SUM_FREQ = 10
 VAL_FREQ = 5000
 
 
-def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
+def sequence_flowloss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
     """ Loss function defined over sequence of flow predictions """
 
     n_predictions = len(flow_preds)
@@ -69,6 +70,49 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
 
     for i in range(n_predictions):
         i_weight = gamma ** (n_predictions - i - 1)
+        i_loss = (flow_preds[i] - flow_gt).abs()
+        flow_loss += i_weight * (valid[:, None] * i_loss).mean()
+
+    epe = torch.sum((flow_preds[-1] - flow_gt) ** 2, dim=1).sqrt()
+    epe = epe.view(-1)[valid.view(-1)]
+
+    metrics = {
+        'epe': epe.mean().item(),
+        '1px': (epe < 1).float().mean().item(),
+        '3px': (epe < 3).float().mean().item(),
+        '5px': (epe < 5).float().mean().item(),
+    }
+
+    return flow_loss, metrics
+
+def t2T(t):
+    bz = t.shape[0]
+    T = torch.zeros([bz, 3, 3], device=t.get_device())
+    T[:, 0, 1] = -t[:, 2]
+    T[:, 0, 2] = t[:, 1]
+    T[:, 1, 0] = t[:, 2]
+    T[:, 1, 2] = -t[:, 0]
+    T[:, 2, 0] = -t[:, 1]
+    T[:, 2, 1] = t[:, 0]
+    return T
+
+def pose2RT(rel_pose):
+    R = rel_pose[:, 0:3, 0:3]
+    T = t2T(rel_pose[:, 0:3, 3] / torch.norm(rel_pose[:, 0:3, 3], dim=1, keepdim=True).expand([-1, 3]))
+    return T, R
+
+def sequence_epploss(flow_preds, flow_gt, valid, semantic_selector, intrinsic, rel_pose, gamma=0.8):
+    """ Loss function defined over sequence of flow predictions """
+    n_predictions = len(flow_preds)
+    flow_loss = 0.0
+
+    T, R = pose2RT(rel_pose)
+    F = T @ R
+    for i in range(n_predictions):
+        i_weight = gamma ** (n_predictions - i - 1)
+
+        curflow = flow_preds[i]
+
         i_loss = (flow_preds[i] - flow_gt).abs()
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
@@ -181,18 +225,20 @@ def validate_kitti(model, args, eval_loader, group, iters=24):
     out_list = torch.zeros(2).cuda(device=args.gpu)
 
     for val_id, batch in enumerate(tqdm(eval_loader)):
-        image1, image2, flow_gt, valid_gt = batch
-
+        image1 = batch['img1']
         image1 = Variable(image1, requires_grad=True)
         image1 = image1.cuda(args.gpu, non_blocking=True)
 
+        image2 = batch['img2']
         image2 = Variable(image2, requires_grad=True)
         image2 = image2.cuda(args.gpu, non_blocking=True)
 
+        flow_gt = batch['flow']
         flow_gt = Variable(flow_gt, requires_grad=True)
         flow_gt = flow_gt.cuda(args.gpu, non_blocking=True)
         flow_gt = flow_gt[0]
 
+        valid_gt = batch['valid']
         valid_gt = Variable(valid_gt, requires_grad=True)
         valid_gt = valid_gt.cuda(args.gpu, non_blocking=True)
         valid_gt = valid_gt[0]
@@ -231,6 +277,12 @@ def validate_kitti(model, args, eval_loader, group, iters=24):
     else:
         return None
 
+def read_splits():
+    split_root = os.path.join(project_rootdir, 'exp_kitti_eigen', 'splits')
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
+    return train_entries, evaluation_entries
+
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
     args.gpu = gpu
@@ -263,14 +315,16 @@ def train(gpu, ngpus_per_node, args):
     if args.stage != 'chairs':
         model.module.freeze_bn()
 
+    train_entries, evaluation_entries = read_splits()
+
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
-    train_dataset = KITTI_eval(aug_params, split='training', root=args.dataset_root)
+    train_dataset = KITTI_eigen(aug_params, split='training', root=args.dataset_root, entries=train_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
 
-    eval_dataset = KITTI_eval(split='evaluation', root=args.dataset_root)
+    eval_dataset = KITTI_eigen(split='evaluation', root=args.dataset_root, entries=evaluation_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
@@ -298,19 +352,34 @@ def train(gpu, ngpus_per_node, args):
         train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = data_blob
 
+            image1 = data_blob['img1']
             image1 = Variable(image1, requires_grad=True)
             image1 = image1.cuda(gpu, non_blocking=True)
 
+            image2 = data_blob['img2']
             image2 = Variable(image2, requires_grad=True)
             image2 = image2.cuda(gpu, non_blocking=True)
 
+            flow = data_blob['flow']
             flow = Variable(flow, requires_grad=True)
             flow = flow.cuda(gpu, non_blocking=True)
 
+            valid = data_blob['valid']
             valid = Variable(valid, requires_grad=True)
             valid = valid.cuda(gpu, non_blocking=True)
+
+            intrinsic = data_blob['intrinsic']
+            intrinsic = Variable(intrinsic, requires_grad=True)
+            intrinsic = intrinsic.cuda(gpu, non_blocking=True)
+
+            rel_pose = data_blob['rel_pose']
+            rel_pose = Variable(rel_pose, requires_grad=True)
+            rel_pose = rel_pose.cuda(gpu, non_blocking=True)
+
+            semantic_selector = data_blob['semantic_selector']
+            semantic_selector = Variable(semantic_selector, requires_grad=True)
+            semantic_selector = semantic_selector.cuda(gpu, non_blocking=True)
 
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
@@ -319,7 +388,10 @@ def train(gpu, ngpus_per_node, args):
 
             flow_predictions = model(image1, image2, iters=args.iters)
 
-            loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
+            metrics = dict()
+            loss_flow, metrics_flow = sequence_flowloss(flow_predictions, flow, valid, args.gamma)
+            loss_epp, metrics_epp = sequence_epploss(flow_predictions, flow, valid, semantic_selector, intrinsic, rel_pose, args.gamma)
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -382,6 +454,8 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--dataset_root', type=str)
+    parser.add_argument('--semantics_root', type=str)
+    parser.add_argument('--depth_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 

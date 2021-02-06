@@ -142,6 +142,12 @@ class Logger:
             self.running_loss = {}
 
     def write_vls(self, image1, image2, flowgt, flow_predictions, valid):
+        image1 = image1.detach()
+        image1 = torch.stack([image1[:, 2, :, :], image1[:, 1, :, :], image1[:, 0, :, :]], dim=1)
+
+        image2 = image2.detach()
+        image2 = torch.stack([image2[:, 2, :, :], image2[:, 1, :, :], image2[:, 0, :, :]], dim=1)
+
         img1 = image1[0].cpu().detach().permute([1, 2, 0]).numpy().astype(np.uint8)
         img2 = image2[0].cpu().detach().permute([1, 2, 0]).numpy().astype(np.uint8)
         flow_pred = flow_to_image(flow_predictions[-1][0].permute([1, 2, 0]).detach().cpu().numpy())
