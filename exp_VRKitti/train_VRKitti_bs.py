@@ -313,7 +313,7 @@ def train(gpu, ngpus_per_node, args):
         logger = Logger(model, scheduler, logroot)
         logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_VRKitti', args.name))
 
-    VAL_FREQ = 5000
+    VAL_FREQ = 500
     add_noise = True
     epoch = 0
 
@@ -336,7 +336,7 @@ def train(gpu, ngpus_per_node, args):
             valid = Variable(valid, requires_grad=True)
             valid = valid.cuda(gpu, non_blocking=True)
 
-            if args.add_noise:
+            if add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
