@@ -510,8 +510,6 @@ class KITTI_eigen(FlowDataset):
             self.pose_list.append(get_pose(root, seq, index, extrinsic))
             self.intrinsic_list.append(intrinsic)
 
-        print("Dataset initialized finished")
-
     def debug_pose(self):
         vlsroot = '/media/shengjie/disk1/visualization/imu_accuracy_vls'
         for k in range(500):
