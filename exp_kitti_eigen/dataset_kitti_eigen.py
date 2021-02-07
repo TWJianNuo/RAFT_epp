@@ -482,7 +482,6 @@ class KITTI_eigen(FlowDataset):
 
         self.entries = entries
         for entry in entries:
-            # entry = '2011_10_03/2011_10_03_drive_0042_sync 0 r'
             seq, index, _ = entry.split(' ')
             index = int(index)
 
@@ -510,6 +509,8 @@ class KITTI_eigen(FlowDataset):
             # Load pose for each frame
             self.pose_list.append(get_pose(root, seq, index, extrinsic))
             self.intrinsic_list.append(intrinsic)
+
+        print("Dataset initialized finished")
 
     def debug_pose(self):
         vlsroot = '/media/shengjie/disk1/visualization/imu_accuracy_vls'
