@@ -214,7 +214,7 @@ class SparseFlowAugmentor:
 
         return flow_img, valid_img
 
-    def spatial_transform(self, img1, img2, flow, valid):
+    def spatial_transform(self, img1, img2, depth, semantic_selector, intrinsic, rel_pose):
         # randomly sample scale
 
         ht, wd = img1.shape[:2]
@@ -230,14 +230,30 @@ class SparseFlowAugmentor:
             # rescale the images
             img1 = cv2.resize(img1, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_LINEAR)
             img2 = cv2.resize(img2, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_LINEAR)
-            flow, valid = self.resize_sparse_flow_map(flow, valid, fx=scale_x, fy=scale_y)
+            depth = cv2.resize(depth, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_NEAREST)
+            semantic_selector = cv2.resize(semantic_selector, None, fx=scale_x, fy=scale_y, interpolation=cv2.INTER_NEAREST)
+
+            resizeM = np.eye(4)
+            resizeM[0, 0] = scale_x
+            resizeM[1, 1] = scale_y
+            intrinsic = resizeM @ intrinsic
 
         if self.do_flip:
+            # Depth Seems incorrect
             if np.random.rand() < 0.5:  # h-flip
                 img1 = img1[:, ::-1]
                 img2 = img2[:, ::-1]
-                flow = flow[:, ::-1] * [-1.0, 1.0]
-                valid = valid[:, ::-1]
+                depth = depth[:, ::-1]
+                semantic_selector = semantic_selector[:, ::-1]
+
+                flipM = np.eye(4)
+                flipM[0, 0] = -1
+                flipM[0, 2] = img1.shape[1]
+                flipM3D = np.linalg.inv(intrinsic) @ flipM @ intrinsic
+                rel_pose = flipM3D @ rel_pose @ np.linalg.inv(flipM3D)
+
+                randPose = np.eye(4)
+                randPose[0:3, 3] = np.random.randn(3)
 
         margin_y = 20
         margin_x = 50
@@ -250,22 +266,26 @@ class SparseFlowAugmentor:
 
         img1 = img1[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
         img2 = img2[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
-        flow = flow[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
-        valid = valid[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
-        return img1, img2, flow, valid
+        depth = depth[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
+        semantic_selector = semantic_selector[y0:y0 + self.crop_size[0], x0:x0 + self.crop_size[1]]
 
-    def __call__(self, img1, img2, flow, valid):
+        intrinsic[0, 2] = intrinsic[0, 2] - x0
+        intrinsic[1, 2] = intrinsic[1, 2] - y0
+        return img1, img2, depth, semantic_selector, intrinsic, rel_pose
+
+    def __call__(self, img1, img2, depth, semantic_selector, intrinsic, rel_pose):
         np.random.seed(int(time.time()))
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
-        img1, img2, flow, valid = self.spatial_transform(img1, img2, flow, valid)
+        img1, img2, depth, semantic_selector, intrinsic, rel_pose = self.spatial_transform(img1, img2, depth, semantic_selector, intrinsic, rel_pose)
 
         img1 = np.ascontiguousarray(img1)
         img2 = np.ascontiguousarray(img2)
-        flow = np.ascontiguousarray(flow)
-        valid = np.ascontiguousarray(valid)
+        depth = np.ascontiguousarray(depth)
+        semantic_selector = np.ascontiguousarray(semantic_selector)
+        valid = (depth > 0) * semantic_selector
 
-        return img1, img2, flow, valid
+        return img1, img2, depth, semantic_selector, intrinsic, rel_pose, valid
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
@@ -285,11 +305,7 @@ class FlowDataset(data.Dataset):
         self.intrinsic_list = list()
         self.pose_list = list()
 
-    def get_gt_flow(self, index):
-        depth = np.array(Image.open(self.depth_list[index])).astype(np.float32) / 256.0
-
-        h, w = depth.shape
-
+    def get_semantic_selector(self, index, h, w):
         semanticspred = Image.open(self.semantics_list[index])
         semanticspred = semanticspred.resize([w, h], Image.NEAREST)
         semanticspred = np.array(semanticspred)
@@ -297,12 +313,13 @@ class FlowDataset(data.Dataset):
         for ll in np.unique(semanticspred).tolist():
             if ll in [24, 25, 26, 27, 28, 29, 30, 31, 32, 33]:
                 semantic_selector[semanticspred == ll] = 0
+        return semantic_selector.astype(np.int)
 
-        intrinsic = self.intrinsic_list[index]
-        rel_pose = self.pose_list[index]
+    def get_gt_flow(self, index, depth, valid, intrinsic, rel_pose):
+        h, w = depth.shape
 
         xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
-        selector = (depth > 0) * (semantic_selector == 1)
+        selector = (valid == 1)
 
         xxf = xx[selector]
         yyf = yy[selector]
@@ -318,7 +335,7 @@ class FlowDataset(data.Dataset):
         flowgt = np.zeros([h, w, 2])
         flowgt[yyf.astype(np.int), xxf.astype(np.int), 0] = pts2d_oview[0, :] - xxf
         flowgt[yyf.astype(np.int), xxf.astype(np.int), 1] = pts2d_oview[1, :] - yyf
-        return flowgt, selector, semantic_selector
+        return flowgt
 
     def __getitem__(self, index):
         if not self.init_seed:
@@ -330,14 +347,19 @@ class FlowDataset(data.Dataset):
                 self.init_seed = True
 
         index = index % len(self.image_list)
-        flow, valid, semantic_selector = self.get_gt_flow(index)
 
         img1 = frame_utils.read_gen(self.image_list[index][0])
         img2 = frame_utils.read_gen(self.image_list[index][1])
 
-        flow = np.array(flow).astype(np.float32)
+        orgw, orgh = img1.size
+
         img1 = np.array(img1).astype(np.uint8)
         img2 = np.array(img2).astype(np.uint8)
+
+        depth = np.array(Image.open(self.depth_list[index])).astype(np.float32) / 256.0
+        intrinsic = self.intrinsic_list[index]
+        rel_pose = self.pose_list[index]
+        semantic_selector = self.get_semantic_selector(index, w=orgw, h=orgh)
 
         # grayscale images
         if len(img1.shape) == 2:
@@ -349,9 +371,13 @@ class FlowDataset(data.Dataset):
 
         if self.augmentor is not None:
             if self.sparse:
-                img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)
-            else:
-                img1, img2, flow = self.augmentor(img1, img2, flow)
+                img1, img2, depth, semantic_selector, intrinsic, rel_pose, valid = self.augmentor(img1, img2, depth, semantic_selector, intrinsic, rel_pose)
+        else:
+            valid = semantic_selector * (depth > 0)
+
+        flow = self.get_gt_flow(index, depth, valid, intrinsic, rel_pose)
+
+        # self.debug(img1, img2, valid, depth, flow, intrinsic, rel_pose, index)
 
         img1 = torch.from_numpy(img1).permute(2, 0, 1).float()
         img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
@@ -367,11 +393,69 @@ class FlowDataset(data.Dataset):
         outputs['img2'] = img2
         outputs['flow'] = flow
         outputs['valid'] = valid.float()
-        outputs['intrinsic'] = torch.from_numpy(self.intrinsic_list[index]).float()
-        outputs['rel_pose'] = torch.from_numpy(self.pose_list[index]).float()
+        outputs['intrinsic'] = torch.from_numpy(intrinsic[0:3, 0:3]).float()
+        outputs['rel_pose'] = torch.from_numpy(rel_pose).float()
         outputs['semantic_selector'] = torch.from_numpy(semantic_selector).float()
+        outputs['depth'] = torch.from_numpy(depth).unsqueeze(0).float()
 
         return outputs
+
+    def t2T(self, t):
+        T = torch.zeros([3, 3])
+        T[0, 1] = -t[2]
+        T[0, 2] = t[1]
+        T[1, 0] = t[2]
+        T[1, 2] = -t[0]
+        T[2, 0] = -t[1]
+        T[2, 1] = t[0]
+        return T
+
+    def debug(self, img1, img2, valid, depth, flow, intrinsic, rel_pose, index):
+        vlsroot = '/media/shengjie/disk1/visualization/aug_correctness_check'
+        h, w, _ = img1.shape
+        xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
+        xx = torch.from_numpy(xx).float()
+        yy = torch.from_numpy(yy).float()
+        selector = torch.from_numpy(valid) == 1
+
+        flowx = flow[selector, 0]
+        flowy = flow[selector, 1]
+
+        xxf = xx[selector]
+        yyf = yy[selector]
+        df = depth[selector]
+
+        xxf_oview = xxf + flowx
+        yyf_oview = yyf + flowy
+
+        intrinsic = torch.from_numpy(intrinsic[0:3, 0:3]).float()
+        rel_pose = torch.from_numpy(rel_pose).float()
+        pts1 = torch.stack([xxf, yyf, torch.ones_like(xxf)], dim=0).float()
+        pts2 = torch.stack([xxf_oview, yyf_oview, torch.ones_like(xxf)], dim=0).float()
+        R = rel_pose[0:3, 0:3]
+        T = self.t2T(rel_pose[0:3, 3] / torch.norm(rel_pose[0:3, 3]))
+        F = T @ R
+        E = torch.inverse(intrinsic).T @ F @ torch.inverse(intrinsic)
+        cons = torch.sum(pts2.T @ E * pts1.T, dim=1).abs().max()
+
+        import matplotlib.pyplot as plt
+        cm = plt.get_cmap('magma')
+        vmax = 0.15
+        tnp = 1 / df / vmax
+        tnp = cm(tnp)
+
+        fig = plt.figure(figsize=(16, 9))
+        fig.add_subplot(2, 1, 1)
+        plt.scatter(xxf.numpy(), yyf.numpy(), 1, tnp)
+        plt.imshow(np.array(img1))
+
+        fig.add_subplot(2, 1, 2)
+        plt.scatter(xxf_oview.numpy(), yyf_oview.numpy(), 1, tnp)
+        plt.imshow(np.array(img2))
+
+        seq, frmidx, _ = self.entries[index].split(' ')
+        plt.savefig(os.path.join(vlsroot, "{}_{}.png".format(seq.split('/')[1], str(frmidx).zfill(10))))
+        plt.close()
 
     def __rmul__(self, v):
         self.flow_list = v * self.flow_list
