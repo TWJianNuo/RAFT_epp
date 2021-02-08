@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen.dataset_kitti_eigen import KITTI_eigen
@@ -134,7 +135,7 @@ def fetch_optimizer(args, model):
 
 
 class Logger:
-    def __init__(self, model, scheduler, logpath):
+    def __init__(self, model, scheduler, logpath, endstep):
         self.model = model
         self.scheduler = scheduler
         self.total_steps = 0
@@ -142,15 +143,19 @@ class Logger:
         self.logpath = logpath
         self.cm = plt.get_cmap('magma')
         self.writer = None
+        self.stt = time.time()
+        self.endstep = endstep
 
     def create_summarywriter(self):
         if self.writer is None:
             self.writer = SummaryWriter(self.logpath)
 
     def _print_training_status(self):
-        metrics_data = [self.running_loss[k] / SUM_FREQ for k in sorted(self.running_loss.keys())]
-        training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps + 1, self.scheduler.get_last_lr()[0])
-        metrics_str = ("{:10.4f}, " * len(metrics_data)).format(*metrics_data)
+        avetime = (time.time() - self.stt) / self.total_steps * (self.endstep - self.total_steps) / 60 / 60
+        training_str = "[step:{:6d}, lr:{:10.7f}, time:{:2.3f}h]: ".format(self.total_steps + 1, self.scheduler.get_last_lr()[0], avetime)
+        metrics_str = ''
+        for k in sorted(self.running_loss.keys()):
+            metrics_str += " {}: {:0.6f} |".format(k, self.running_loss[k] / SUM_FREQ)
 
         # print the training status
         print(training_str + metrics_str)
@@ -459,8 +464,8 @@ def train(gpu, ngpus_per_node, args):
     scaler = GradScaler(enabled=args.mixed_precision)
 
     if args.gpu == 0:
-        logger = Logger(model, scheduler, logroot)
-        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_eigen_background', args.name))
+        logger = Logger(model, scheduler, logroot, args.num_steps)
+        logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_eigen_background', args.name), args.num_steps)
 
     VAL_FREQ = 5000
     add_noise = False
