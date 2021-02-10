@@ -895,6 +895,11 @@ def train(gpu, ngpus_per_node, args):
             semantic_selector = Variable(semantic_selector, requires_grad=True)
             semantic_selector = semantic_selector.cuda(gpu, non_blocking=True)
 
+            if args.gpu == 0:
+                print("current batch is %d" % i_batch)
+            continue
+
+
             if add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
