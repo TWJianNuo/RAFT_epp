@@ -343,8 +343,8 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         #     X = np.array(Image.fromarray(X).resize([w * 2, h], Image.BILINEAR))
         #     Image.fromarray(X).show()
 
-        if outputsrec['loss_mv'] > 0.1:
-            continue
+        # if outputsrec['loss_mv'] > 0.1:
+        #     continue
 
         eppc = eppCbck.epp_constrain_val(flowest=flow, E=E, valid=semantic_selector)
         epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
@@ -842,6 +842,7 @@ def train(gpu, ngpus_per_node, args):
     epoch = 0
 
     should_keep_training = True
+    print(validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group))
     while should_keep_training:
 
         train_sampler.set_epoch(epoch)
