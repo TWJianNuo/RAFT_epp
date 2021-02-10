@@ -841,7 +841,6 @@ def train(gpu, ngpus_per_node, args):
     add_noise = False
     epoch = 0
 
-    # print(validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group))
     should_keep_training = True
     while should_keep_training:
 
