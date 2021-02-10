@@ -833,13 +833,13 @@ def train(gpu, ngpus_per_node, args):
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
     train_dataset = KITTI_eigen(aug_params, split='training', root=args.dataset_root, entries=train_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
+    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True,
                                    shuffle=(train_sampler is None), num_workers=int(args.num_workers / ngpus_per_node), drop_last=True,
                                    sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(split='evaluation', root=args.dataset_root, entries=evaluation_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False,
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True,
                                    shuffle=(eval_sampler is None), num_workers=1, drop_last=True,
                                    sampler=eval_sampler)
 
@@ -865,10 +865,6 @@ def train(gpu, ngpus_per_node, args):
 
         train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
-            if args.gpu == 0:
-                print("current batch is %f" % i_batch)
-            continue
-
             optimizer.zero_grad()
 
             image1 = data_blob['img1']
