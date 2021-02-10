@@ -865,6 +865,10 @@ def train(gpu, ngpus_per_node, args):
 
         train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
+            if args.gpu == 0:
+                print("current batch is %f" % i_batch)
+            continue
+
             optimizer.zero_grad()
 
             image1 = data_blob['img1']
