@@ -849,7 +849,6 @@ def train(gpu, ngpus_per_node, args):
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
-    scaler = GradScaler(enabled=args.mixed_precision)
 
     if args.gpu == 0:
         logger = Logger(model, scheduler, logroot, args.num_steps)
@@ -910,18 +909,20 @@ def train(gpu, ngpus_per_node, args):
             metrics.update(metrics_eppc)
 
             loss = loss_flow + loss_eppc * args.eppcw
-            scaler.scale(loss).backward()
+            loss.backward()
+            # scaler.scale(loss).backward()
 
-            if args.gpu == 0:
-                print("current batch is %d" % i_batch)
-            continue
+            # if args.gpu == 0:
+            #     print("current batch is %d" % i_batch)
+            # continue
 
-            scaler.unscale_(optimizer)
+            # scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
-            scaler.step(optimizer)
+            # scaler.step(optimizer)
+            optimizer.step()
             scheduler.step()
-            scaler.update()
+            # scaler.update()
 
             if args.gpu == 0:
                 logger.push(metrics, image1, image2, flow, flow_predictions, valid, data_blob['depth'])
