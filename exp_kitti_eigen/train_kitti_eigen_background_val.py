@@ -900,12 +900,7 @@ def train(gpu, ngpus_per_node, args):
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda(gpu, non_blocking=True)).clamp(0.0, 255.0)
 
-            with torch.no_grad():
-                flow_predictions = model(image1, image2, iters=args.iters)
-
-            if args.gpu == 0:
-                print("current batch is %d" % i_batch)
-            continue
+            flow_predictions = model(image1, image2, iters=args.iters)
 
             metrics = dict()
             loss_flow, metrics_flow = sequence_flowloss(flow_predictions, flow, valid, args.gamma)
@@ -922,6 +917,10 @@ def train(gpu, ngpus_per_node, args):
             scaler.step(optimizer)
             scheduler.step()
             scaler.update()
+            
+            if args.gpu == 0:
+                print("current batch is %d" % i_batch)
+            continue
 
             if args.gpu == 0:
                 logger.push(metrics, image1, image2, flow, flow_predictions, valid, data_blob['depth'])
