@@ -102,7 +102,7 @@ def pose2RT(rel_pose):
     T = t2T(rel_pose[:, 0:3, 3] / torch.norm(rel_pose[:, 0:3, 3], dim=1, keepdim=True).expand([-1, 3]))
     return T, R
 
-def sequence_eppcloss(eppCbck, flow_preds, semantic_selector, intrinsic, rel_pose, gamma=0.8):
+def sequence_eppcloss(eppCbck, flow_preds, semantic_selector, E, gamma=0.8):
     """ Loss function defined over sequence of flow predictions """
     n_predictions = len(flow_preds)
     eppc_loss = 0.0
@@ -111,7 +111,7 @@ def sequence_eppcloss(eppCbck, flow_preds, semantic_selector, intrinsic, rel_pos
     for i in range(n_predictions):
         i_weight = gamma ** (n_predictions - i - 1)
 
-        eppc = eppCbck.epp_constrain(flowest=flow_preds[i], intrinsic=intrinsic, rel_pose=rel_pose, valid=semantic_selector)
+        eppc = eppCbck.epp_constrain(flowest=flow_preds[i], E=E, valid=semantic_selector)
         eppc_loss += i_weight * eppc
 
         if i == len(flow_preds) - 1:
@@ -281,6 +281,10 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         rel_pose = Variable(rel_pose)
         rel_pose = rel_pose.cuda(args.gpu, non_blocking=True)
 
+        E = batch['E']
+        E = Variable(E)
+        E = E.cuda(args.gpu, non_blocking=True)
+
         semantic_selector = batch['semantic_selector']
         semantic_selector = Variable(semantic_selector)
         semantic_selector = semantic_selector.cuda(args.gpu, non_blocking=True)
@@ -342,7 +346,7 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         if outputsrec['loss_mv'] > 0.1:
             continue
 
-        eppc = eppCbck.epp_constrain_val(flowest=flow, intrinsic=intrinsic, rel_pose=rel_pose, valid=semantic_selector)
+        eppc = eppCbck.epp_constrain_val(flowest=flow, E=E, valid=semantic_selector)
         epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
         mag = torch.sum(flow_gt**2, dim=0).sqrt()
 
@@ -408,42 +412,27 @@ def read_splits():
     return train_entries, evaluation_entries
 
 class eppConstrainer_background(torch.nn.Module):
-    def __init__(self, height, width):
+    def __init__(self, height, width, bz):
         super(eppConstrainer_background, self).__init__()
 
         self.height = height
         self.width = width
+        self.bz = bz
 
         xx, yy = np.meshgrid(range(width), range(height))
         pts = np.stack([xx, yy, np.ones_like(xx)], axis=2)
-        self.pts = nn.Parameter(torch.from_numpy(pts).float().unsqueeze(0).unsqueeze(4), requires_grad=False)
+        self.pts = nn.Parameter(torch.from_numpy(pts).float().unsqueeze(0).unsqueeze(4).repeat([self.bz, 1, 1, 1, 1]).contiguous(), requires_grad=False)
 
         self.pts_dict_eval = dict()
 
-    def t2T(self, t, bz):
-        T = torch.zeros([bz, 3, 3], device=t.device, dtype=t.dtype)
-        T[:, 0, 1] = -t[:, 2]
-        T[:, 0, 2] = t[:, 1]
-        T[:, 1, 0] = t[:, 2]
-        T[:, 1, 2] = -t[:, 0]
-        T[:, 2, 0] = -t[:, 1]
-        T[:, 2, 1] = t[:, 0]
-        return T
-
-    def epp_constrain(self, flowest, intrinsic, rel_pose, valid):
+    def epp_constrain(self, flowest, E, valid):
         bz, _, h, w = flowest.shape
         assert (self.height == h) and (self.width == w)
 
         flowest_ex = torch.cat([flowest, torch.zeros([bz, 1, h, w], device=flowest.device, dtype=flowest.dtype)], dim=1).permute([0, 2, 3, 1]).unsqueeze(4)
 
-        ptse1 = self.pts.expand([bz, -1, -1, -1, -1])
-        ptse2 = ptse1 + flowest_ex
-
-        R = rel_pose[:, 0:3, 0:3]
-        t = rel_pose[:, 0:3, 3] / torch.norm(rel_pose[:, 0:3, 3], dim=1, keepdim=True).expand([-1, 3])
-        T = self.t2T(t, bz)
-        F = T @ R
-        E = torch.inverse(intrinsic).transpose(dim0=2, dim1=1) @ F @ torch.inverse(intrinsic)
+        ptse1 = self.pts
+        ptse2 = self.pts + flowest_ex
 
         Ee = E.unsqueeze(1).unsqueeze(1).expand([-1, h, w, -1, -1])
 
@@ -452,7 +441,7 @@ class eppConstrainer_background(torch.nn.Module):
 
         return eppcons_loss
 
-    def epp_constrain_val(self, flowest, intrinsic, rel_pose, valid):
+    def epp_constrain_val(self, flowest, E, valid):
         if len(flowest.shape) == 3:
             flowest = flowest.unsqueeze(0)
         bz, _, h, w = flowest.shape
@@ -470,12 +459,6 @@ class eppConstrainer_background(torch.nn.Module):
 
         ptse1 = pts.expand([bz, -1, -1, -1, -1])
         ptse2 = ptse1 + flowest_ex
-
-        R = rel_pose[:, 0:3, 0:3]
-        t = rel_pose[:, 0:3, 3] / torch.norm(rel_pose[:, 0:3, 3], dim=1, keepdim=True).expand([-1, 3])
-        T = self.t2T(t, bz)
-        F = T @ R
-        E = torch.inverse(intrinsic).transpose(dim0=2, dim1=1) @ F @ torch.inverse(intrinsic)
 
         Ee = E.unsqueeze(1).unsqueeze(1).expand([-1, h, w, -1, -1])
 
@@ -703,8 +686,8 @@ class eppConcluer(torch.nn.Module):
         loss_mv = 1 - torch.sum(t_est * t_gt)
         loss_ang = torch.mean((self.rot2ang((posegt[0:3, 0:3])) - self.rot2ang(R_est)).abs())
 
-        print("\nOptimization finished at step %d, mv loss: %f, ang loss: %f, norm: %f, in all points: %f, gt pose: %f" % (
-            kk, loss_mv, loss_ang, torch.norm(t_reg), loss_est, loss_gt))
+        # print("\nOptimization finished at step %d, mv loss: %f, ang loss: %f, norm: %f, in all points: %f, gt pose: %f" % (
+        #     kk, loss_mv, loss_ang, torch.norm(t_reg), loss_est, loss_gt))
 
         outputsrec['loss_mv'] = float(loss_mv.detach().cpu().numpy())
         outputsrec['loss_ang'] = float(loss_ang.detach().cpu().numpy())
@@ -805,7 +788,7 @@ def train(gpu, ngpus_per_node, args):
         model = model.to(f'cuda:{args.gpu}')
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True, output_device=args.gpu)
 
-        eppCbck = eppConstrainer_background(height=args.image_size[0], width=args.image_size[1])
+        eppCbck = eppConstrainer_background(height=args.image_size[0], width=args.image_size[1], bz=args.batch_size)
         eppCbck.to(f'cuda:{args.gpu}')
 
         eppconcluer = eppConcluer()
@@ -840,7 +823,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = KITTI_eigen(split='evaluation', root=args.dataset_root, entries=evaluation_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True,
-                                   shuffle=(eval_sampler is None), num_workers=1, drop_last=True,
+                                   shuffle=(eval_sampler is None), num_workers=3, drop_last=True,
                                    sampler=eval_sampler)
 
     if args.distributed:
@@ -858,7 +841,7 @@ def train(gpu, ngpus_per_node, args):
     add_noise = False
     epoch = 0
 
-    # print(validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group))
+    print(validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group))
     should_keep_training = True
     while should_keep_training:
 
@@ -882,13 +865,9 @@ def train(gpu, ngpus_per_node, args):
             valid = Variable(valid, requires_grad=True)
             valid = valid.cuda(gpu, non_blocking=True)
 
-            intrinsic = data_blob['intrinsic']
-            intrinsic = Variable(intrinsic, requires_grad=True)
-            intrinsic = intrinsic.cuda(gpu, non_blocking=True)
-
-            rel_pose = data_blob['rel_pose']
-            rel_pose = Variable(rel_pose, requires_grad=True)
-            rel_pose = rel_pose.cuda(gpu, non_blocking=True)
+            E = data_blob['E']
+            E = Variable(E, requires_grad=True)
+            E = E.cuda(gpu, non_blocking=True)
 
             semantic_selector = data_blob['semantic_selector']
             semantic_selector = Variable(semantic_selector, requires_grad=True)
@@ -903,9 +882,7 @@ def train(gpu, ngpus_per_node, args):
 
             metrics = dict()
             loss_flow, metrics_flow = sequence_flowloss(flow_predictions, flow, valid, args.gamma)
-            # loss_eppc, metrics_eppc = sequence_eppcloss(eppCbck, flow_predictions, semantic_selector, intrinsic, rel_pose, args.gamma)
-            loss_eppc = 0
-            metrics_eppc = dict()
+            loss_eppc, metrics_eppc = sequence_eppcloss(eppCbck, flow_predictions, semantic_selector, E, args.gamma)
 
             metrics.update(metrics_flow)
             metrics.update(metrics_eppc)

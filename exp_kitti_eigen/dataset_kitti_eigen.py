@@ -388,6 +388,8 @@ class FlowDataset(data.Dataset):
         else:
             valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
 
+        E = self.getE(rel_pose, intrinsic)
+
         outputs = dict()
         outputs['img1'] = img1
         outputs['img2'] = img2
@@ -395,19 +397,35 @@ class FlowDataset(data.Dataset):
         outputs['valid'] = valid.float()
         outputs['intrinsic'] = torch.from_numpy(intrinsic[0:3, 0:3]).float()
         outputs['rel_pose'] = torch.from_numpy(rel_pose).float()
+        outputs['E'] = torch.from_numpy(E).float()
         outputs['semantic_selector'] = torch.from_numpy(semantic_selector).float()
         outputs['depth'] = torch.from_numpy(depth).unsqueeze(0).float()
 
         return outputs
 
+    def getE(self, rel_pose, intrinsic):
+        intrinsic = intrinsic[0:3, 0:3]
+        t = rel_pose[0:3, 3] / np.sqrt(np.sum(rel_pose[0:3, 3] ** 2))
+        T = self.t2T(t)
+        R = rel_pose[0:3, 0:3]
+
+        F = T @ R
+        E = np.linalg.inv(intrinsic).T @ F @ np.linalg.inv(intrinsic)
+        return E
+
     def t2T(self, t):
-        T = torch.zeros([3, 3])
+        if torch.is_tensor(t):
+            T = torch.zeros([3, 3])
+        else:
+            T = np.zeros([3, 3])
+
         T[0, 1] = -t[2]
         T[0, 2] = t[1]
         T[1, 0] = t[2]
         T[1, 2] = -t[0]
         T[2, 0] = -t[1]
         T[2, 1] = t[0]
+
         return T
 
     def debug(self, img1, img2, valid, depth, flow, intrinsic, rel_pose, index):
