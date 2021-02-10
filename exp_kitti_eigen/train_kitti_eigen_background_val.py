@@ -295,12 +295,51 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
         flow = padder.unpad(flow_pr[0])
 
-        # pts1, pts2 = eppconcluer.flowmap2ptspair(flowmap=flow_gt.unsqueeze(0), valid=valid_gt.unsqueeze(0).unsqueeze(0))
-        # outputsrec = eppconcluer.newton_gauss_F(pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic.squeeze(), posegt=rel_pose.squeeze(), depthgt=depth.squeeze()[valid_gt.squeeze() == 1])
         pts1, pts2 = eppconcluer.flowmap2ptspair(flowmap=flow.unsqueeze(0), valid=semantic_selector.unsqueeze(0))
         outputsrec = eppconcluer.newton_gauss_F(pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic.squeeze(), posegt=rel_pose.squeeze())
 
-        if len(outputsrec.keys()) == 0:
+        # if outputsrec['loss_mv'] > 0.01 and outputsrec['loss_mv'] < 0.1:
+        #     image1_unpad = padder.unpad(image1[0])
+        #     image2_unpad = padder.unpad(image2[0])
+        #     img1 = image1_unpad.cpu().detach().permute([1, 2, 0]).numpy().astype(np.uint8)
+        #     img2 = image2_unpad.cpu().detach().permute([1, 2, 0]).numpy().astype(np.uint8)
+        #
+        #     validnp = valid_gt.detach().cpu().numpy() == 1
+        #     depthnp = depth[0].cpu().squeeze().numpy()
+        #
+        #     h, w = image1_unpad.shape[1::]
+        #     xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
+        #
+        #     xxf = xx[validnp]
+        #     yyf = yy[validnp]
+        #     depthf = depthnp[validnp]
+        #     xxf_oview = flow_gt[0].detach().cpu().numpy()[validnp] + xxf
+        #     yyf_oview = flow_gt[1].detach().cpu().numpy()[validnp] + yyf
+        #
+        #     cm = plt.get_cmap('magma')
+        #     vmax = 0.15
+        #     tnp = 1 / depthf / vmax
+        #     tnp = cm(tnp)
+        #
+        #     fig = plt.figure(figsize=(16, 2.5))
+        #     canvas = FigureCanvasAgg(fig)
+        #     fig.add_subplot(1, 2, 1)
+        #     plt.scatter(xxf, yyf, 1, tnp)
+        #     plt.imshow(img1)
+        #
+        #     fig.add_subplot(1, 2, 2)
+        #     plt.scatter(xxf_oview, yyf_oview, 1, tnp)
+        #     plt.imshow(img2)
+        #
+        #     plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+        #     canvas.draw()
+        #     buf = canvas.buffer_rgba()
+        #     plt.close()
+        #     X = np.asarray(buf)
+        #     X = np.array(Image.fromarray(X).resize([w * 2, h], Image.BILINEAR))
+        #     Image.fromarray(X).show()
+
+        if outputsrec['loss_mv'] > 0.1:
             continue
 
         eppc = eppCbck.epp_constrain_val(flowest=flow, intrinsic=intrinsic, rel_pose=rel_pose, valid=semantic_selector)
@@ -354,7 +393,7 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         residual_optl = residual_opt_list[0] / residual_opt_list[1]
         residual_gtl = residual_gt_list[0] / residual_gt_list[1]
 
-        print("Validation KITTI, epe: %f, f1: %f, eppc: %f, mvl: %f, angl: %f, residual_optl: %f, residual_gt: %f" % (epe, f1, eppc, mvl, angl, residual_optl, residual_gtl))
+        # print("Validation KITTI, epe: %f, f1: %f, eppc: %f, mvl: %f, angl: %f, residual_optl: %f, residual_gt: %f" % (epe, f1, eppc, mvl, angl, residual_optl, residual_gtl))
         return {'kitti-epe': float(epe.detach().cpu().numpy()), 'kitti-f1': float(f1.detach().cpu().numpy()), 'kitti-eppc': float(eppc.detach().cpu().numpy()),
                 'mvl': float(mvl.detach().cpu().numpy()), 'angl': float(angl.detach().cpu().numpy()),
                 'residual_optl': float(residual_optl.detach().cpu().numpy()), 'residual_gtl': float(residual_gtl.detach().cpu().numpy())
@@ -446,7 +485,7 @@ class eppConstrainer_background(torch.nn.Module):
         return eppcons_loss
 
 class eppConcluer(torch.nn.Module):
-    def __init__(self, itnum=100, laplacian=1e-2, lr=0.2):
+    def __init__(self, itnum=100, laplacian=1e-2, lr=0.1):
         super(eppConcluer, self).__init__()
         self.itnum = itnum
         self.laplacian = laplacian
@@ -655,20 +694,23 @@ class eppConcluer(torch.nn.Module):
         F_gt = torch.inverse(intrinsic).T @ E_gt @ torch.inverse(intrinsic)
         loss_gt = torch.mean(torch.abs(torch.sum((pts2d2.T @ F_gt) * pts2d1.T, dim=1)))
 
-        t_est = (t_reg / torch.norm(t_reg))
+        combinations = self.extract_RT_analytic(E_est)
+        t_est, R_est = self.select_RT(combinations, pts2d1=pts2d1, pts2d2=pts2d2, intrinsic=intrinsic)
+
+        t_est = (t_est / torch.norm(t_est))
         t_gt = (posegt[0:3, 3] / torch.norm(posegt[0:3, 3])).float()
 
         loss_mv = 1 - torch.sum(t_est * t_gt)
-        loss_ang = torch.mean((self.rot2ang((posegt[0:3, 0:3])) - ang_reg).abs())
+        loss_ang = torch.mean((self.rot2ang((posegt[0:3, 0:3])) - self.rot2ang(R_est)).abs())
 
-        if not (torch.isnan(loss_mv) or torch.isnan(loss_ang) or torch.isnan(loss_est) or torch.isnan(loss_gt)):
-            outputsrec['loss_mv'] = float(loss_mv.detach().cpu().numpy())
-            outputsrec['loss_ang'] = float(loss_ang.detach().cpu().numpy())
-            outputsrec['loss_constrain'] = float(loss_est.detach().cpu().numpy())
-            outputsrec['loss_constrain_gt'] = float(loss_gt.detach().cpu().numpy())
+        print("\nOptimization finished at step %d, mv loss: %f, ang loss: %f, norm: %f, in all points: %f, gt pose: %f" % (
+            kk, loss_mv, loss_ang, torch.norm(t_reg), loss_est, loss_gt))
 
-        # print("Optimization finished at step %d, mv loss: %f, ang loss: %f, depthloss: %f, norm: %f, in all points: %f, gt pose: %f" % (
-        #     kk, loss_mv, loss_ang, depthdiff, torch.norm(t_reg), loss_est, loss_gt))
+        outputsrec['loss_mv'] = float(loss_mv.detach().cpu().numpy())
+        outputsrec['loss_ang'] = float(loss_ang.detach().cpu().numpy())
+        outputsrec['loss_constrain'] = float(loss_est.detach().cpu().numpy())
+        outputsrec['loss_constrain_gt'] = float(loss_gt.detach().cpu().numpy())
+
         return outputsrec
 
     def extract_RT_analytic(self, E):
@@ -792,7 +834,7 @@ def train(gpu, ngpus_per_node, args):
     train_dataset = KITTI_eigen(aug_params, split='training', root=args.dataset_root, entries=train_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
-                                   shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   shuffle=(train_sampler is None), num_workers=int(args.num_workers / ngpus_per_node), drop_last=True,
                                    sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(split='evaluation', root=args.dataset_root, entries=evaluation_entries, semantics_root=args.semantics_root, depth_root=args.depth_root)
@@ -817,7 +859,7 @@ def train(gpu, ngpus_per_node, args):
     add_noise = False
     epoch = 0
 
-    validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group)
+    # print(validate_kitti(model.module, args, eval_loader, eppCbck, eppconcluer, group))
     should_keep_training = True
     while should_keep_training:
 
