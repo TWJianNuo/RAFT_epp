@@ -903,7 +903,9 @@ def train(gpu, ngpus_per_node, args):
 
             metrics = dict()
             loss_flow, metrics_flow = sequence_flowloss(flow_predictions, flow, valid, args.gamma)
-            loss_eppc, metrics_eppc = sequence_eppcloss(eppCbck, flow_predictions, semantic_selector, intrinsic, rel_pose, args.gamma)
+            # loss_eppc, metrics_eppc = sequence_eppcloss(eppCbck, flow_predictions, semantic_selector, intrinsic, rel_pose, args.gamma)
+            loss_eppc = 0
+            metrics_eppc = dict()
 
             metrics.update(metrics_flow)
             metrics.update(metrics_eppc)
