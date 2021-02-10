@@ -911,16 +911,17 @@ def train(gpu, ngpus_per_node, args):
 
             loss = loss_flow + loss_eppc * args.eppcw
             scaler.scale(loss).backward()
+
+            if args.gpu == 0:
+                print("current batch is %d" % i_batch)
+            continue
+
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
             scaler.step(optimizer)
             scheduler.step()
             scaler.update()
-            
-            if args.gpu == 0:
-                print("current batch is %d" % i_batch)
-            continue
 
             if args.gpu == 0:
                 logger.push(metrics, image1, image2, flow, flow_predictions, valid, data_blob['depth'])
