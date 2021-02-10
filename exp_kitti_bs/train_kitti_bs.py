@@ -271,8 +271,7 @@ def train(gpu, ngpus_per_node, args):
 
     aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
     train_dataset = KITTI_eval(aug_params, split='training', root=args.dataset_root)
-    # train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
-    train_sampler = None
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
@@ -302,7 +301,7 @@ def train(gpu, ngpus_per_node, args):
     should_keep_training = True
     while should_keep_training:
 
-        # train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
             image1, image2, flow, valid = data_blob
