@@ -302,7 +302,7 @@ def train(gpu, ngpus_per_node, args):
     should_keep_training = True
     while should_keep_training:
 
-        train_sampler.set_epoch(epoch)
+        # train_sampler.set_epoch(epoch)
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
             image1, image2, flow, valid = data_blob
