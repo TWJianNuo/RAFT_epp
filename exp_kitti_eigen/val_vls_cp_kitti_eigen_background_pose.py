@@ -148,7 +148,9 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         flow = padder.unpad(flow_pr[0])
 
         pts1, pts2 = eppconcluer.flowmap2ptspair(flowmap=flow.unsqueeze(0), valid=semantic_selector.unsqueeze(0))
-        outputsrec = eppconcluer.newton_gauss_F(pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic.squeeze(), posegt=rel_pose.squeeze(), posedeepv2d=rel_pose_deepv2d)
+        # outputsrec = eppconcluer.newton_gauss_F(pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic.squeeze(), posegt=rel_pose.squeeze(), posedeepv2d=rel_pose_deepv2d)
+        outputsrec = eppconcluer.newton_gauss_F(pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic.squeeze(),
+                                                posegt=rel_pose.squeeze(), posedeepv2d=rel_pose.squeeze())
 
         # if args.gpu == 0:
         #     print("\nIteration: %d, loss_mv: %.2E, loss_ang: %.2E" % (val_id, outputsrec['loss_mv'], outputsrec['loss_ang']))
