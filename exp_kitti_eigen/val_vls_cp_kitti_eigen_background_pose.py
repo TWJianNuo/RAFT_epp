@@ -732,11 +732,9 @@ def train(gpu, ngpus_per_node, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default='raft', help="name your experiment")
-    parser.add_argument('--stage', help="determines which dataset to use for training")
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
+    parser.add_argument('--stage', help="determines which dataset to use for training", default='kitti')
     parser.add_argument('--small', action='store_true', help='use small model')
-    parser.add_argument('--validation', type=str, nargs='+')
 
     parser.add_argument('--lr', type=float, default=0.00002)
     parser.add_argument('--num_steps', type=int, default=100000)
@@ -767,10 +765,6 @@ if __name__ == '__main__':
 
     torch.manual_seed(1234)
     np.random.seed(1234)
-
-    if not os.path.isdir(os.path.join(args.logroot, args.name)):
-        os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
-    os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
 
     torch.cuda.empty_cache()
 
