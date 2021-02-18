@@ -105,7 +105,7 @@ def acquire_gt_flow(intrinsics, depthgt, posesgt, semantic_selector_arr):
     return pts2d1, pts2d2
 
 class eppConcluer(torch.nn.Module):
-    def __init__(self, itnum=2, laplacian=1e-2, lr=1):
+    def __init__(self, itnum=100, laplacian=1e-2, lr=0.2):
         super(eppConcluer, self).__init__()
         self.itnum = itnum
         self.laplacian = laplacian
@@ -258,7 +258,7 @@ class eppConcluer(torch.nn.Module):
 
         ang_reg = torch.zeros([3], device=intrinsic.device, dtype=torch.float)
         t_reg = torch.zeros([3], device=intrinsic.device, dtype=torch.float)
-        t_reg[-1] = -0.99
+        t_reg[-1] = -0.95
 
         E_init = self.t2T(t_reg / torch.norm(t_reg)) @ self.rot_from_axisangle(ang_reg)
         F_init = torch.inverse(intrinsic).T @ E_init @ torch.inverse(intrinsic)
@@ -266,15 +266,8 @@ class eppConcluer(torch.nn.Module):
 
         minLoss = 1e10
 
-        import time
-        sttime = time.time()
-        sumt1 = 0
-
         for kk in range(self.itnum):
-            tmpst = time.time()
             J, r, totloss = self.compute_JacobianM(pts2d1, pts2d2, intrinsic, t_reg, ang_reg, self.laplacian)
-            sumt1 += time.time() - tmpst
-
             curloss = r.sum().detach()
             try:
                 M = J.T @ J
@@ -294,8 +287,6 @@ class eppConcluer(torch.nn.Module):
             ang_reg = (ang_reg - self.lr * updatem[0:3, 0])
             t_reg = (t_reg - self.lr * updatem[3:6, 0])
 
-        timeprop = sumt1 / (time.time() - sttime)
-
         E_est = self.t2T(t_reg / torch.norm(t_reg)) @ self.rot_from_axisangle(ang_reg)
         F_est = torch.inverse(intrinsic).T @ E_est @ torch.inverse(intrinsic)
         loss_est = float(torch.mean(torch.abs(torch.sum((pts2d2.T @ F_est) * pts2d1.T, dim=1))).cpu().numpy())
@@ -312,17 +303,15 @@ class eppConcluer(torch.nn.Module):
         loss_mv = 1 - torch.sum(t_est * t_gt)
         loss_ang = torch.mean((self.rot2ang((posegt[0:3, 0:3])) - ang_reg).abs())
 
-        # rdepth, alpha, selector = self.flow2depth(pts2d1, pts2d2, intrinsic, Rpred, t_est, depthgt)
+        rdepth, alpha, selector = self.flow2depth(pts2d1, pts2d2, intrinsic, Rpred, t_est, depthgt)
 
-        # depthdiff = torch.abs(rdepth[selector] - depthgt[selector]).mean()
+        depthdiff = torch.abs(rdepth[selector] - depthgt[selector]).mean()
         outputsrec['loss_mv'] = float(loss_mv.detach().cpu().numpy())
         outputsrec['loss_ang'] = float(loss_ang.detach().cpu().numpy())
-        # outputsrec['loss_depth'] = float(depthdiff.detach().cpu().numpy())
+        outputsrec['loss_depth'] = float(depthdiff.detach().cpu().numpy())
         outputsrec['loss_constrain'] = loss_est
-        # print(
-        #     "Optimization finished at step %d, mv loss: %f, ang loss: %f, depthloss: %f, norm: %f, in all points: %f, gt pose: %f" % (
-        #     kk, loss_mv, loss_ang, depthdiff, torch.norm(t_reg), loss_est, loss_gt))
-        print("Optimization finished at step %d, mv loss: %f, ang loss: %f, norm: %f, in all points: %f, gt pose: %f, init: %f, time prop: %f" % (kk, loss_mv, loss_ang, torch.norm(t_reg), loss_est, loss_gt, loss_init, timeprop))
+        print("Optimization finished at step %d, mv loss: %f, ang loss: %f, depthloss: %f, norm: %f, in all points: %f, gt pose: %f" % (kk, loss_mv, loss_ang, depthdiff, torch.norm(t_reg), loss_est, loss_gt))
+        # print("Optimization finished at step %d, mv loss: %f, ang loss: %f, norm: %f, in all points: %f, gt pose: %f, init: %f, time prop: %f" % (kk, loss_mv, loss_ang, torch.norm(t_reg), loss_est, loss_gt, loss_init, timeprop))
         return outputsrec
 
     def extract_RT_analytic(self, E):
@@ -419,6 +408,7 @@ mvloss = list()
 depthloss = list()
 
 eppcocluer = eppConcluer()
+
 with torch.no_grad():
     for flowpre_path in flowpre_paths:
         flowpred = np.load(flowpre_path)
@@ -488,6 +478,6 @@ with torch.no_grad():
         pts2d2sel = torch.stack([pts2d2[0, semantic_selector], pts2d2[1, semantic_selector], pts2d2[2, semantic_selector]], dim=0)
 
         depthgt = depthmapf[optimization_selector]
-        # eppcocluer.newton_gauss_F(pts2d1_gt.cuda(), pts2d2_gt.cuda(), intrinsic.cuda(), torch.from_numpy(posegt).float().cuda(), depthgt.cuda())
+        eppcocluer.newton_gauss_F(pts2d1_gt.cuda(), pts2d2_gt.cuda(), intrinsic.cuda(), torch.from_numpy(posegt).float().cuda(), depthgt.cuda())
         # eppcocluer.newton_gauss_F(pts2d1_gt, pts2d2_gt, intrinsic, torch.from_numpy(posegt).float(), depthgt)
-        eppcocluer.newton_gauss_F(pts2d1sel.cuda(), pts2d2sel.cuda(), intrinsic.cuda(), torch.from_numpy(posegt).float().cuda(), depthgt.cuda())
+        # eppcocluer.newton_gauss_F(pts2d1sel.cuda(), pts2d2sel.cuda(), intrinsic.cuda(), torch.from_numpy(posegt).float().cuda(), depthgt.cuda())

@@ -400,6 +400,7 @@ class FlowDataset(data.Dataset):
         outputs['E'] = torch.from_numpy(E).float()
         outputs['semantic_selector'] = torch.from_numpy(semantic_selector).float()
         outputs['depth'] = torch.from_numpy(depth).unsqueeze(0).float()
+        outputs['entry'] = self.entries[index]
 
         return outputs
 

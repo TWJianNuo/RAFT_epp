@@ -23,6 +23,24 @@ void epp_compression_cuda(
     int compheight,
     int compwidth
     );
+void epp_batchselection_cuda(
+    torch::Tensor batchidx,
+    torch::Tensor seldst,
+    torch::Tensor selsrc,
+    int insnum,
+    int bs,
+    int srch,
+    int srcw
+    );
+void epp_batchselection_backward_cuda(
+    torch::Tensor batchidx,
+    torch::Tensor selbckdst,
+    torch::Tensor selbcksrc,
+    int insnum,
+    int bs,
+    int srch,
+    int srcw
+    );
 // C++ interface
 
 // NOTE: AT_ASSERT has become AT_CHECK on master after 0.4.
@@ -65,7 +83,41 @@ void epp_compression(
     return;
 }
 
+void epp_batchselection(
+    torch::Tensor batchidx,
+    torch::Tensor seldst,
+    torch::Tensor selsrc,
+    int insnum,
+    int bs,
+    int srch,
+    int srcw
+    ) {
+    CHECK_INPUT(batchidx);
+    CHECK_INPUT(seldst);
+    CHECK_INPUT(selsrc);
+    epp_batchselection_cuda(batchidx, seldst, selsrc, insnum, bs, srch, srcw);
+    return;
+}
+
+void epp_batchselection_backward(
+    torch::Tensor batchidx,
+    torch::Tensor selbckdst,
+    torch::Tensor selbcksrc,
+    int insnum,
+    int bs,
+    int srch,
+    int srcw
+    ) {
+    CHECK_INPUT(batchidx);
+    CHECK_INPUT(selbckdst);
+    CHECK_INPUT(selbcksrc);
+    epp_batchselection_backward_cuda(batchidx, selbckdst, selbcksrc, insnum, bs, srch, srcw);
+    return;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("epp_inflation", &epp_inflation, "inflation operation");
   m.def("epp_compression", &epp_compression, "compression operation");
+  m.def("epp_batchselection", &epp_batchselection, "batch selection operation");
+  m.def("epp_batchselection_backward", &epp_batchselection_backward, "batch selection operation backward");
 }
