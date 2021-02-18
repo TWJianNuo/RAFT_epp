@@ -137,9 +137,9 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         depth = Variable(depth)
         depth = depth.cuda(args.gpu, non_blocking=True)
 
-        rel_pose_deepv2d = read_deepv2d_pose(batch['entry'][0])
-        rel_pose_deepv2d = Variable(rel_pose_deepv2d)
-        rel_pose_deepv2d = rel_pose_deepv2d.cuda(args.gpu, non_blocking=True)
+        # rel_pose_deepv2d = read_deepv2d_pose(batch['entry'][0])
+        # rel_pose_deepv2d = Variable(rel_pose_deepv2d)
+        # rel_pose_deepv2d = rel_pose_deepv2d.cuda(args.gpu, non_blocking=True)
 
         padder = InputPadder(image1.shape, mode='kitti')
         image1, image2 = padder.pad(image1, image2)
@@ -256,11 +256,11 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         angl_list[0] += outputsrec['loss_ang']
         angl_list[1] += 1
 
-        mvlv2d_list[0] += outputsrec['loss_mv_dv2d']
-        mvlv2d_list[1] += 1
-
-        anglv2d_list[0] += outputsrec['loss_ang_dv2d']
-        anglv2d_list[1] += 1
+        # mvlv2d_list[0] += outputsrec['loss_mv_dv2d']
+        # mvlv2d_list[1] += 1
+        #
+        # anglv2d_list[0] += outputsrec['loss_ang_dv2d']
+        # anglv2d_list[1] += 1
 
         residual_opt_list[0] += outputsrec['loss_constrain']
         residual_opt_list[1] += 1
@@ -278,8 +278,8 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         dist.all_reduce(tensor=residual_opt_list, op=dist.ReduceOp.SUM, group=group)
         dist.all_reduce(tensor=residual_gt_list, op=dist.ReduceOp.SUM, group=group)
 
-        dist.all_reduce(tensor=mvlv2d_list, op=dist.ReduceOp.SUM, group=group)
-        dist.all_reduce(tensor=anglv2d_list, op=dist.ReduceOp.SUM, group=group)
+        # dist.all_reduce(tensor=mvlv2d_list, op=dist.ReduceOp.SUM, group=group)
+        # dist.all_reduce(tensor=anglv2d_list, op=dist.ReduceOp.SUM, group=group)
 
     if args.gpu == 0:
         epe = epe_list[0] / epe_list[1]
@@ -291,11 +291,15 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         residual_optl = residual_opt_list[0] / residual_opt_list[1]
         residual_gtl = residual_gt_list[0] / residual_gt_list[1]
 
-        mvl_dv2d = mvlv2d_list[0] / mvlv2d_list[1]
-        angl_dv2d = anglv2d_list[0] / anglv2d_list[1]
+        # mvl_dv2d = mvlv2d_list[0] / mvlv2d_list[1]
+        # angl_dv2d = anglv2d_list[0] / anglv2d_list[1]
 
+        # return {'kitti-epe': float(epe.detach().cpu().numpy()), 'kitti-f1': float(f1.detach().cpu().numpy()), 'kitti-eppc': float(eppc.detach().cpu().numpy()),
+        #         'mvl': float(mvl.detach().cpu().numpy()), 'angl': float(angl.detach().cpu().numpy()), 'mvl_dv2d': float(mvl_dv2d.detach().cpu().numpy()), 'angl_dv2d': float(angl_dv2d.detach().cpu().numpy()),
+        #         'residual_optl': float(residual_optl.detach().cpu().numpy()), 'residual_gtl': float(residual_gtl.detach().cpu().numpy())
+        #         }
         return {'kitti-epe': float(epe.detach().cpu().numpy()), 'kitti-f1': float(f1.detach().cpu().numpy()), 'kitti-eppc': float(eppc.detach().cpu().numpy()),
-                'mvl': float(mvl.detach().cpu().numpy()), 'angl': float(angl.detach().cpu().numpy()), 'mvl_dv2d': float(mvl_dv2d.detach().cpu().numpy()), 'angl_dv2d': float(angl_dv2d.detach().cpu().numpy()),
+                'mvl': float(mvl.detach().cpu().numpy()), 'angl': float(angl.detach().cpu().numpy()),
                 'residual_optl': float(residual_optl.detach().cpu().numpy()), 'residual_gtl': float(residual_gtl.detach().cpu().numpy())
                 }
     else:
