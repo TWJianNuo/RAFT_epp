@@ -134,10 +134,6 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppc_dict, group, iters=24
         depth = Variable(depth)
         depth = depth.cuda(args.gpu, non_blocking=True)
 
-        rel_pose_deepv2d = read_deepv2d_pose(batch['entry'][0])
-        rel_pose_deepv2d = Variable(rel_pose_deepv2d)
-        rel_pose_deepv2d = rel_pose_deepv2d.cuda(args.gpu, non_blocking=True)
-
         padder = InputPadder(image1.shape, mode='kitti')
         image1, image2 = padder.pad(image1, image2)
 
