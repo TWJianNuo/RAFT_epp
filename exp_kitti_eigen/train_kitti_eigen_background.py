@@ -590,7 +590,7 @@ if __name__ == '__main__':
     parser.add_argument('--eppcw', type=float, default=0.1)
 
     parser.add_argument('--distributed', default=True, type=bool)
-    parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1234')
+    parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
     parser.add_argument('--dist_backend', type=str, help='distributed backend', default='nccl')
 
     args = parser.parse_args()

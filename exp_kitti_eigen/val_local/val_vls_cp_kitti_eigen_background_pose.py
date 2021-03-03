@@ -1,6 +1,6 @@
 from __future__ import print_function, division
 import os, sys, inspect
-project_rootdir = os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))))
+project_rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))))
 sys.path.insert(0, project_rootdir)
 sys.path.append('core')
 
@@ -153,11 +153,11 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
         if outputsrec['loss_mv'] > 0.1:
             continue
 
-        if True:
+        if False:
             rel_pose_deepv2d[0:3, 3] = rel_pose_deepv2d[0:3, 3] / torch.norm(rel_pose_deepv2d[0:3, 3]) * torch.norm(rel_pose[0, 0:3, 3])
             poses = [rel_pose.squeeze().cpu().numpy(), rel_pose_deepv2d.squeeze().cpu().numpy(), outputsrec['pose_est'].squeeze().cpu().numpy()]
             vlsroots = ['/media/shengjie/c9c81c9f-511c-41c6-bfe0-2fc19666fb32/Visualizations/kitti_imu_eigen', '/media/shengjie/c9c81c9f-511c-41c6-bfe0-2fc19666fb32/Visualizations/deepv2d_posevls_eigen',
-                        '/media/shengjie/c9c81c9f-511c-41c6-bfe0-2fc19666fb32/Visualizations/raft_posevls_eigen_nptsdist']
+                        '/media/shengjie/c9c81c9f-511c-41c6-bfe0-2fc19666fb32/Visualizations/raft_posevls_eigen']
 
             seq, imgname, _ = batch['entry'][0].split(' ')
 
@@ -172,42 +172,42 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
             h, w = image1_unpad.shape[1::]
             xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
 
-            k = 2
-            vlsroot = vlsroots[k]
-            posec = poses[k]
+            for k in range(3):
+                vlsroot = vlsroots[k]
+                posec = poses[k]
 
-            xxf = xx[validnp]
-            yyf = yy[validnp]
-            depthf = depthnp[validnp]
+                xxf = xx[validnp]
+                yyf = yy[validnp]
+                depthf = depthnp[validnp]
 
-            pts3d = np.stack([xxf * depthf, yyf * depthf, depthf, np.ones_like(xxf)], axis=0)
+                pts3d = np.stack([xxf * depthf, yyf * depthf, depthf, np.ones_like(xxf)], axis=0)
 
-            intrinsicnp = np.eye(4)
-            intrinsicnp[0:3, 0:3] = intrinsic.squeeze().cpu().numpy()
-            pts3d_oview = intrinsicnp @ posec @ np.linalg.inv(intrinsicnp) @ pts3d
-            pts3d_oview_x = pts3d_oview[0, :] / pts3d_oview[2, :]
-            pts3d_oview_y = pts3d_oview[1, :] / pts3d_oview[2, :]
+                intrinsicnp = np.eye(4)
+                intrinsicnp[0:3, 0:3] = intrinsic.squeeze().cpu().numpy()
+                pts3d_oview = intrinsicnp @ posec @ np.linalg.inv(intrinsicnp) @ pts3d
+                pts3d_oview_x = pts3d_oview[0, :] / pts3d_oview[2, :]
+                pts3d_oview_y = pts3d_oview[1, :] / pts3d_oview[2, :]
 
-            cm = plt.get_cmap('magma')
-            vmax = 0.15
-            tnp = 1 / depthf / vmax
-            tnp = cm(tnp)
+                cm = plt.get_cmap('magma')
+                vmax = 0.15
+                tnp = 1 / depthf / vmax
+                tnp = cm(tnp)
 
-            fig = plt.figure(figsize=(16, 9))
-            fig.add_subplot(2, 1, 1)
-            plt.scatter(xxf, yyf, 1, tnp)
-            plt.imshow(img1)
+                fig = plt.figure(figsize=(16, 9))
+                fig.add_subplot(2, 1, 1)
+                plt.scatter(xxf, yyf, 1, tnp)
+                plt.imshow(img1)
 
-            fig.add_subplot(2, 1, 2)
-            plt.scatter(pts3d_oview_x, pts3d_oview_y, 1, tnp)
-            plt.imshow(img2)
+                fig.add_subplot(2, 1, 2)
+                plt.scatter(pts3d_oview_x, pts3d_oview_y, 1, tnp)
+                plt.imshow(img2)
 
-            plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-            plt.savefig(os.path.join(vlsroot, "{}_{}.png".format(seq.split("/")[1], imgname.zfill(10))))
-            plt.close()
+                plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+                plt.savefig(os.path.join(vlsroot, "{}_{}.png".format(seq.split("/")[1], imgname.zfill(10))))
+                plt.close()
 
         if False:
-            exportroot = '/media/shengjie/disk1/Prediction/RAFT_eigen_pose_nptsdist'
+            exportroot = '/media/shengjie/disk1/Prediction/RAFT_eigen_pose'
             seq, imgname, _ = batch['entry'][0].split(' ')
             svfold = os.path.join(exportroot, seq)
             os.makedirs(svfold, exist_ok=True)
@@ -217,7 +217,7 @@ def validate_kitti(model, args, eval_loader, eppCbck, eppconcluer, group, iters=
             with open(picklepath, 'wb') as handle:
                 pickle.dump(pose2write, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-            exportroot = '/media/shengjie/disk1/Prediction/IMU_eigen_pose_nptsdist'
+            exportroot = '/media/shengjie/disk1/Prediction/IMU_eigen_pose'
             seq, imgname, _ = batch['entry'][0].split(' ')
             svfold = os.path.join(exportroot, seq)
             os.makedirs(svfold, exist_ok=True)
@@ -473,33 +473,15 @@ class eppConcluer(torch.nn.Module):
 
         return T0, T1, T2
 
-    def normalize_pts(self, pts):
-        device = pts.device
-        meanx = pts[0, :].mean()
-        meany = pts[1, :].mean()
-        scale = torch.sqrt((pts[0, :] - meanx) ** 2 + (pts[1, :] - meany) ** 2).mean() / np.sqrt(2)
-
-        pts_normed = torch.ones_like(pts)
-        pts_normed[0, :] = (pts[0, :] - meanx) / scale
-        pts_normed[1, :] = (pts[1, :] - meany) / scale
-
-        transfixM = torch.eye(3, dtype=torch.float, device=device)
-        transfixM[0, 2] = -meanx
-        transfixM[1, 2] = -meany
-
-        scalefixM = torch.eye(3, dtype=torch.float, device=device)
-        scalefixM[0, 0] = 1 / scale
-        scalefixM[1, 1] = 1 / scale
-
-        return pts_normed, scalefixM @ transfixM
-
-    def compute_JacobianM(self, pts2d1, pts2d2, pts2d1_normed, pts2d2_normed, fixM1, fixM2, intrinsic, t, ang, lagr):
+    def compute_JacobianM(self, pts2d1, pts2d2, intrinsic, t, ang, lagr):
         R = self.rot_from_axisangle(ang)
         T = self.t2T(t)
 
         derT0, derT1, derT2 = self.derivative_translate(intrinsic.device)
         rotxd, rotyd, rotzd = self.derivative_angle(ang)
 
+        pts2d1_bz = (pts2d1.T).unsqueeze(2)
+        pts2d2_bz = (pts2d2.T).unsqueeze(2)
         samplenum = pts2d1.shape[1]
 
         r_bias = (torch.norm(t) - 1)
@@ -507,53 +489,22 @@ class eppConcluer(torch.nn.Module):
         J_t1_bias = 2 * lagr * r_bias / torch.norm(t) * t[1]
         J_t2_bias = 2 * lagr * r_bias / torch.norm(t) * t[2]
 
-        ## ============Compute DerivM2============ ##
-        planeparam2 = torch.inverse(fixM2 @ intrinsic).T @ T @ R @ torch.inverse(intrinsic) @ pts2d1
-        planeparam2_norm = torch.norm(planeparam2, dim=0, keepdim=True)
-        planeparam2_normed = planeparam2 / planeparam2_norm
-        rdist_2 = torch.sum(planeparam2_normed * pts2d2_normed, dim=0, keepdim=True)
+        pts2d2_bz_t = torch.transpose(torch.transpose(pts2d2_bz, 1, 2) @ torch.inverse(intrinsic).T, 1, 2)
+        pts2d1_bz_t = torch.inverse(intrinsic) @ pts2d1_bz
+        r = (torch.transpose(pts2d2_bz_t, 1, 2) @ T @ R @ pts2d1_bz_t).squeeze()
+        derivM = pts2d2_bz_t @ torch.transpose(pts2d1_bz_t, 1, 2)
 
-        deriv_tonorm2 = 2 * rdist_2 * pts2d2_normed
-        dtonx2, dtony2, dtonz2 = torch.split(deriv_tonorm2, 1, dim=0)
-        px2, py2, pz2 = torch.split(planeparam2, 1, dim=0)
+        J_t0 = torch.sum(derivM * (derT0 @ R), dim=[1, 2]) * 2 * r / samplenum + J_t0_bias / samplenum
+        J_t1 = torch.sum(derivM * (derT1 @ R), dim=[1, 2]) * 2 * r / samplenum + J_t1_bias / samplenum
+        J_t2 = torch.sum(derivM * (derT2 @ R), dim=[1, 2]) * 2 * r / samplenum + J_t2_bias / samplenum
 
-        deriv_px2 = dtonx2 / planeparam2_norm - torch.sum(px2 * planeparam2_normed * deriv_tonorm2, dim=0, keepdim=True) / (planeparam2_norm ** 2)
-        deriv_py2 = dtony2 / planeparam2_norm - torch.sum(py2 * planeparam2_normed * deriv_tonorm2, dim=0, keepdim=True) / (planeparam2_norm ** 2)
-        deriv_pz2 = dtonz2 / planeparam2_norm - torch.sum(pz2 * planeparam2_normed * deriv_tonorm2, dim=0, keepdim=True) / (planeparam2_norm ** 2)
-        deriv_norm2 = torch.cat([deriv_px2, deriv_py2, deriv_pz2], dim=0)
-        deriv_M2 = (deriv_norm2.T).unsqueeze(2) @ (pts2d1.T).unsqueeze(1) @ torch.inverse(intrinsic).T
-        deriv_M2 = (torch.inverse(fixM2 @ intrinsic)).unsqueeze(0).expand([samplenum, -1, -1]) @ deriv_M2
-
-        ## ============Compute DerivM1============ ##
-        planeparam1 = (pts2d2.T @ torch.inverse(intrinsic).T @ T @ R @ torch.inverse(fixM1 @ intrinsic)).T
-        planeparam1_norm = torch.norm(planeparam1, dim=0, keepdim=True)
-        planeparam1_normed = planeparam1 / planeparam1_norm
-        rdist_1 = torch.sum(planeparam1_normed * pts2d1_normed, dim=0, keepdim=True)
-
-        deriv_tonorm1 = 2 * rdist_1 * pts2d1_normed
-        dtonx1, dtony1, dtonz1 = torch.split(deriv_tonorm1, 1, dim=0)
-        px1, py1, pz1 = torch.split(planeparam1, 1, dim=0)
-
-        deriv_px1 = dtonx1 / planeparam1_norm - torch.sum(px1 * planeparam1_normed * deriv_tonorm1, dim=0, keepdim=True) / (planeparam1_norm ** 2)
-        deriv_py1 = dtony1 / planeparam1_norm - torch.sum(py1 * planeparam1_normed * deriv_tonorm1, dim=0, keepdim=True) / (planeparam1_norm ** 2)
-        deriv_pz1 = dtonz1 / planeparam1_norm - torch.sum(pz1 * planeparam1_normed * deriv_tonorm1, dim=0, keepdim=True) / (planeparam1_norm ** 2)
-        deriv_norm1 = torch.cat([deriv_px1, deriv_py1, deriv_pz1], dim=0)
-        deriv_M1 = (pts2d2.T).unsqueeze(2) @ (deriv_norm1.T).unsqueeze(1)
-        deriv_M1 = deriv_M1 @ torch.inverse(fixM1 @ intrinsic).T
-        deriv_M1 = (torch.inverse(intrinsic)).unsqueeze(0).expand([samplenum, -1, -1]) @ deriv_M1
-
-        ## ============== ##
-        J_t0 = torch.sum((deriv_M2 + deriv_M1) * (derT0 @ R), dim=[1, 2]) / samplenum + J_t0_bias / samplenum
-        J_t1 = torch.sum((deriv_M2 + deriv_M1) * (derT1 @ R), dim=[1, 2]) / samplenum + J_t1_bias / samplenum
-        J_t2 = torch.sum((deriv_M2 + deriv_M1) * (derT2 @ R), dim=[1, 2]) / samplenum + J_t2_bias / samplenum
-
-        J_ang0 = torch.sum((deriv_M2 + deriv_M1) * (T @ rotxd), dim=[1, 2]) / samplenum
-        J_ang1 = torch.sum((deriv_M2 + deriv_M1) * (T @ rotyd), dim=[1, 2]) / samplenum
-        J_ang2 = torch.sum((deriv_M2 + deriv_M1) * (T @ rotzd), dim=[1, 2]) / samplenum
+        J_ang0 = torch.sum(derivM * (T @ rotxd), dim=[1, 2]) * 2 * r / samplenum
+        J_ang1 = torch.sum(derivM * (T @ rotyd), dim=[1, 2]) * 2 * r / samplenum
+        J_ang2 = torch.sum(derivM * (T @ rotzd), dim=[1, 2]) * 2 * r / samplenum
 
         JacobM = torch.stack([J_ang0, J_ang1, J_ang2, J_t0, J_t1, J_t2], dim=1)
-        residual = (rdist_2 ** 2 / samplenum + rdist_1 ** 2 / samplenum + lagr * r_bias ** 2 / samplenum)
-        return JacobM, residual.T
+        residual = (r ** 2 / samplenum + lagr * r_bias ** 2 / samplenum).unsqueeze(1)
+        return JacobM, residual, r.abs().mean().detach()
 
     def flowmap2ptspair(self, flowmap, valid):
         _, _, h, w = flowmap.shape
@@ -584,16 +535,13 @@ class eppConcluer(torch.nn.Module):
         # Newton Gauss Alg
         outputsrec = dict()
 
-        pts2d1_normed, fixM1 = self.normalize_pts(pts2d1)
-        pts2d2_normed, fixM2 = self.normalize_pts(pts2d2)
-
         ang_reg = torch.zeros([3], device=intrinsic.device, dtype=torch.float)
         t_reg = torch.zeros([3], device=intrinsic.device, dtype=torch.float)
         t_reg[-1] = -0.95
 
         minLoss = 1e10
         for kk in range(self.itnum):
-            J, r = self.compute_JacobianM(pts2d1, pts2d2, pts2d1_normed, pts2d2_normed, fixM1, fixM2, intrinsic, t_reg, ang_reg, self.laplacian)
+            J, r, totloss = self.compute_JacobianM(pts2d1, pts2d2, intrinsic, t_reg, ang_reg, self.laplacian)
             curloss = r.sum().detach()
 
             try:

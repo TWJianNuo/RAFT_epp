@@ -266,7 +266,7 @@ class eppcore_selupdate(nn.Module):
 class EPPCore(nn.Module):
     """Layer to perform a convolution followed by ELU
     """
-    def __init__(self, height, width, bz, itnum=10, lr=0.2, lap=1e-2, maxinsnum=200):
+    def __init__(self, height, width, bz, itnum=100, lr=0.2, lap=1e-2, maxinsnum=200):
         super(EPPCore, self).__init__()
         self.height = height
         self.width = width
@@ -589,6 +589,23 @@ class EPPCore(nn.Module):
         choiced_R = self.eppsel(maxidx, torch.stack(combs_R, dim=2))
         return choiced_t, choiced_R
 
+    def select_RT_uguess(self, combinations, poses_guess):
+        combs_t, combs_R = combinations
+        combs_t_stack = torch.stack(combs_t, dim=2)
+        combs_R_stack = torch.stack(combs_R, dim=2)
+        with torch.no_grad():
+            t_guess = poses_guess[:, :, 0:3, 3:4] / torch.norm(poses_guess[:, :, 0:3, 3:4], dim=[2, 3], keepdim=True)
+            R = poses_guess[:, :, 0:3, 0:3]
+
+            t_diff = (combs_t_stack - t_guess.unsqueeze(2).expand([-1, -1, 4, -1, -1])).abs().sum(dim=[3,4])
+            R_diff = (combs_R_stack - R.unsqueeze(2).expand([-1, -1, 4, -1, -1])).abs().sum(dim=[3,4])
+            minidx = torch.argmin(t_diff + R_diff, dim=2, keepdim=True).squeeze(-1).squeeze(-1).int()
+
+        choiced_t = self.eppsel(minidx, combs_t_stack)
+        choiced_R = self.eppsel(minidx, combs_R_stack)
+
+        return choiced_t, choiced_R
+
     def flow2depth_relative(self, pts2d1, pts2d2, intrinsic, R, t, insmap):
         M = intrinsic @ R @ torch.inverse(intrinsic)
         delta_t = intrinsic @ t
@@ -604,7 +621,7 @@ class EPPCore(nn.Module):
         rdepth = ((delta_tx_inf - pts2d2x * delta_tz_inf) + (delta_ty_inf - pts2d2y * delta_tz_inf)) / denom
         return rdepth
 
-    def flow2epp(self, insmap, flowmap, intrinsic, t_init=None, ang_init=None):
+    def flow2epp(self, insmap, flowmap, intrinsic, t_init=None, ang_init=None, poses_guess=None):
         if t_init is None:
             t_init = self.t_init
         if ang_init is None:
@@ -674,9 +691,103 @@ class EPPCore(nn.Module):
             ang = ang - updateang * self.lr
 
         t = t / torch.norm(t, dim=[2,3], keepdim=True)
-        t, R = self.select_RT(combinations=self.extract_tR_combs(t, ang), pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic_ex, insmap=insmap)
+
+        if poses_guess is None:
+            t, R = self.select_RT(combinations=self.extract_tR_combs(t, ang), pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic_ex, insmap=insmap)
+        else:
+            t, R = self.select_RT_uguess(combinations=self.extract_tR_combs(t, ang), poses_guess=poses_guess)
 
         return t, R
+
+    def flow2epp_analysis(self, insmap, flowmap, intrinsic, bz, insidx, t_init=None, ang_init=None, poses_guess=None):
+        if t_init is None:
+            t_init = self.t_init
+        if ang_init is None:
+            ang_init = self.ang_init
+
+        inscount = self.eppcompress(insmap, (insmap > -1).squeeze(1).unsqueeze(-1).unsqueeze(-1).float(), self.maxinsnum)
+        inscount_inf = self.eppinflate(insmap, inscount) + 1e-5
+
+        intrinsic_ex = intrinsic.unsqueeze(1).expand([-1, self.maxinsnum, -1, -1])
+        intrinsic_inv = torch.inverse(intrinsic)
+        intrinsic_inv_inf = intrinsic_inv.view([self.bz, 1, 1, 3, 3]).expand([-1, self.height, self.width, -1, -1])
+
+        pts1, pts2 = self.flowmap2pts(flowmap)
+        ptsl = torch.transpose(torch.transpose(pts2, dim0=3, dim1=4) @ torch.transpose(intrinsic_inv_inf, dim0=3, dim1=4), dim0=3, dim1=4)
+        ptsr = intrinsic_inv_inf @ pts1
+        derivM = ptsl @ torch.transpose(ptsr, dim0=3, dim1=4)
+
+        r_last = torch.ones_like(inscount) * 1e10
+        terminateflag = torch.ones_like(inscount, dtype=torch.bool) * (inscount > 0)
+
+        t = t_init
+        ang = ang_init
+        for k in range(self.itnum):
+            T = self.t2T(t)
+            R, rotxd, rotyd, rotzd = self.ang2R(ang, requires_deriv=True)
+
+            T_inf = self.eppinflate(insmap, T)
+            R_inf = self.eppinflate(insmap, R)
+            rotxd_inf = self.eppinflate(insmap, rotxd)
+            rotyd_inf = self.eppinflate(insmap, rotyd)
+            rotzd_inf = self.eppinflate(insmap, rotzd)
+
+            tnorm = torch.norm(t, dim=[2, 3], keepdim=True)
+            J_t0_bias = 2 * self.lap * (tnorm - 1) / tnorm * t[:, :, 0:1, :]
+            J_t1_bias = 2 * self.lap * (tnorm - 1) / tnorm * t[:, :, 1:2, :]
+            J_t2_bias = 2 * self.lap * (tnorm - 1) / tnorm * t[:, :, 2:3, :]
+            J_t0_bias_inf = self.eppinflate(insmap, J_t0_bias)
+            J_t1_bias_inf = self.eppinflate(insmap, J_t1_bias)
+            J_t2_bias_inf = self.eppinflate(insmap, J_t2_bias)
+            tnorm_inf = self.eppinflate(insmap, tnorm)
+
+            r = (torch.transpose(ptsl, dim0=3, dim1=4) @ T_inf @ R_inf @ ptsr)
+            r_square = (r ** 2 + self.lap * (tnorm_inf - 1) ** 2) / inscount_inf
+
+            J_t0 = (torch.sum(derivM * (self.T0_inf @ R_inf), dim=[3, 4], keepdim=True) * 2 * r + J_t0_bias_inf) / inscount_inf
+            J_t1 = (torch.sum(derivM * (self.T1_inf @ R_inf), dim=[3, 4], keepdim=True) * 2 * r + J_t1_bias_inf) / inscount_inf
+            J_t2 = (torch.sum(derivM * (self.T2_inf @ R_inf), dim=[3, 4], keepdim=True) * 2 * r + J_t2_bias_inf) / inscount_inf
+
+            J_ang0 = (torch.sum(derivM * (T_inf @ rotxd_inf), dim=[3, 4], keepdim=True) * 2 * r) / inscount_inf
+            J_ang1 = (torch.sum(derivM * (T_inf @ rotyd_inf), dim=[3, 4], keepdim=True) * 2 * r) / inscount_inf
+            J_ang2 = (torch.sum(derivM * (T_inf @ rotzd_inf), dim=[3, 4], keepdim=True) * 2 * r) / inscount_inf
+
+            JacobM = torch.cat([J_ang0, J_ang1, J_ang2, J_t0, J_t1, J_t2], dim=-2)
+            MM = JacobM @ torch.transpose(JacobM, dim1=3, dim0=4)
+            updateMl = self.eppcompress(insmap, MM, self.maxinsnum)
+            Mr = JacobM * r_square.expand([-1,-1,-1,6,-1])
+            updateMr = self.eppcompress(insmap, Mr, self.maxinsnum)
+
+            r_current = self.eppcompress(insmap, r ** 2, self.maxinsnum)
+
+            updateang, updatel, terminateflag = self.eppupdate(updateMl, updateMr, inscount, r_current, r_last, terminateflag, self.idtpadding)
+
+            if terminateflag is not None:
+                if terminateflag[bz, insidx, 0, 0] == 1:
+                    print("Iteration %d, loss: %.2E" % (k, r_current[bz, insidx, 0, 0].detach().cpu().item()))
+
+            r_last = r_current
+            if updateang is None or updatel is None:
+                break
+
+            t = t - updatel * self.lr
+            ang = ang - updateang * self.lr
+
+        t = t / torch.norm(t, dim=[2,3], keepdim=True)
+
+        if poses_guess is None:
+            t, R = self.select_RT(combinations=self.extract_tR_combs(t, ang), pts2d1=pts1, pts2d2=pts2, intrinsic=intrinsic_ex, insmap=insmap)
+        else:
+            t, R = self.select_RT_uguess(combinations=self.extract_tR_combs(t, ang), poses_guess=poses_guess)
+
+        return t, R
+
+    def ck_tRcombs_correctness(self, combs):
+        t_combs, R_combs = combs
+        for k in range(4):
+            T = self.t2T(t_combs[k])
+            R = R_combs[k]
+            print((T @ R).abs().sum(dim=[2, 3])[0, 0:3])
 
     def get_eppcons(self, insmap, flowmap, intrinsic, poses):
         t = poses[:, :, 0:3, 3:4]

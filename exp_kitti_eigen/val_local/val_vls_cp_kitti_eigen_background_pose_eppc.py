@@ -1,6 +1,6 @@
 from __future__ import print_function, division
 import os, sys, inspect
-project_rootdir = os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))))
+project_rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))))
 sys.path.insert(0, project_rootdir)
 sys.path.append('core')
 

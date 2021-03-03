@@ -110,3 +110,10 @@ def tensor2grad(gradtensor, percentile=95, pos_bar=0, neg_bar=0, viewind=0):
     disp_grad_numpy = gradnumpy + 0.5
     colorMap = cm(disp_grad_numpy)[:,:,0:3]
     return Image.fromarray((colorMap * 255).astype(np.uint8))
+
+def tensor2rgb(tensor, viewind=0):
+    tnp = tensor.detach().cpu().permute([0, 2, 3, 1]).contiguous()[viewind, :, :, :].numpy()
+    if np.max(tnp) <= 1:
+        tnp = tnp * 255
+    tnp = np.clip(tnp, a_min=0, a_max=255).astype(np.uint8)
+    return Image.fromarray(tnp)
