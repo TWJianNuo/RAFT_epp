@@ -82,8 +82,7 @@ class eppcore_inflation(torch.autograd.Function):
 
         bz, _, h, w = instance.shape
         _, maxinsnum, infh, infw = infsrc.shape
-        device = infsrc.device
-        infdst = torch.zeros([bz, h, w, infh, infw], dtype=torch.float32, device=device)
+        infdst = torch.zeros([bz, h, w, infh, infw], dtype=torch.float32, device=infsrc.device)
         eppcoreops.epp_inflation(instance, infdst, infsrc, h, w, bz, infh, infw)
         # debug_epp_inflation(instance, infdst, infsrc, bz)
 
@@ -109,8 +108,7 @@ class eppcore_inflation(torch.autograd.Function):
 
         grad_infsrc = grad_infsrc.contiguous()
 
-        device = grad_infsrc.device
-        compdst = torch.zeros([bz, maxinsnum, comph, compw], dtype=torch.double, device=device)
+        compdst = torch.zeros([bz, maxinsnum, comph, compw], dtype=torch.double, device=grad_infsrc.device)
         eppcoreops.epp_compression(instance, compdst, grad_infsrc, h, w, bz, comph, compw)
         compdst = compdst.float()
 
@@ -138,8 +136,7 @@ class eppcore_compression(torch.autograd.Function):
 
         bz, _, h, w = instance.shape
         _, _, _, comph, compw = compsrc.shape
-        device = compsrc.device
-        compdst = torch.zeros([bz, maxinsnum, comph, compw], dtype=torch.double, device=device)
+        compdst = torch.zeros([bz, maxinsnum, comph, compw], dtype=torch.double, device=compsrc.device)
 
         eppcoreops.epp_compression(instance, compdst, compsrc, h, w, bz, comph, compw)
         compdst = compdst.float()
@@ -165,8 +162,7 @@ class eppcore_compression(torch.autograd.Function):
 
         grad_compdst = grad_compdst.contiguous()
 
-        device = grad_compdst.device
-        infdst = torch.zeros([bz, h, w, infh, infw], dtype=torch.float32, device=device)
+        infdst = torch.zeros([bz, h, w, infh, infw], dtype=torch.float32, device=grad_compdst.device)
         eppcoreops.epp_inflation(instance, infdst, grad_compdst, h, w, bz, infh, infw)
 
         return None, infdst, None
