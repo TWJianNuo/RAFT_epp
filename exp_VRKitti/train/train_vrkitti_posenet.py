@@ -424,7 +424,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, entries=evaluation_entries)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
-                                   shuffle=(eval_sampler is None), num_workers=args.num_workers, drop_last=True,
+                                   shuffle=(eval_sampler is None), num_workers=4, drop_last=True,
                                    sampler=eval_sampler)
 
     if args.distributed:
