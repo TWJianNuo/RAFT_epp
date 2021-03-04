@@ -461,6 +461,8 @@ def train(gpu, ngpus_per_node, args):
             R_gt = poses[:, 0, 0:3, 0:3]
             ang_gt = R2ang(R_gt)
 
+            print(i_batch)
+
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
