@@ -103,9 +103,9 @@ class FlowDataset(data.Dataset):
         return len(self.image_list)
 
 
-class VirtualKITTI2(FlowDataset):
+class VirtualKITTI(FlowDataset):
     def __init__(self, aug_params=None, split='training', root='datasets/KITTI', entries=None):
-        super(VirtualKITTI2, self).__init__(aug_params, sparse=False)
+        super(VirtualKITTI, self).__init__(aug_params, sparse=False)
         if split == 'testing':
             self.is_test = True
         self.root = root
