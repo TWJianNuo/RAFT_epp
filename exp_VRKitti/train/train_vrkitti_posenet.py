@@ -437,7 +437,7 @@ def train(gpu, ngpus_per_node, args):
         logger = Logger(model, scheduler, logroot)
         logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_VRKitti', args.name))
 
-    VAL_FREQ = 500
+    VAL_FREQ = 1000
     minf1 = 100
     epoch = 0
 
@@ -530,7 +530,7 @@ def train(gpu, ngpus_per_node, args):
                         minf1 = results['kitti-f1']
                         PATH = os.path.join(logroot, 'minf1.pth')
                         torch.save(model.state_dict(), PATH)
-                        print("model saved to %f" % PATH)
+                        print("model saved to %s" % PATH)
 
             total_steps += 1
 
