@@ -1,1 +1,1 @@
-from exp_VRKitti.dataset_VRKitti2 import VirtualKITTI2
+from .dataset_VRKitti2 import VirtualKITTI2
