@@ -461,36 +461,6 @@ def train(gpu, ngpus_per_node, args):
             R_gt = poses[:, 0, 0:3, 0:3]
             ang_gt = R2ang(R_gt)
 
-            angobj_inf = model.module.eppinflate(insmap, ang).squeeze(-1).squeeze(-1).unsqueeze(1)
-            scaleobj_inf = model.module.eppinflate(insmap, scale).squeeze(-1).squeeze(-1).unsqueeze(1)
-            insnum = model.module.eppcompress(insmap, (insmap > -1).float().squeeze(1).unsqueeze(-1).unsqueeze(-1), args.maxinsnum)
-
-            self_ang, self_tdir, self_tscale, obj_pose = model(image1, image2)
-
-            loss_self_ang = torch.abs(self_ang - ang_gt).mean()
-            loss_self_tdir = torch.abs(self_tdir - t_gt_nromed).mean()
-            loss_self_tscale = torch.abs(self_tscale - t_gt_norm).mean()
-
-            selector = (insmap > 0).float()
-            loss_objscale = 0
-            loss_objang = 0
-            for k in range(4):
-                objscale_pred = F.interpolate(obj_pose[('obj_scale', k)], [args.inheight, args.inwidth], mode='bilinear', align_corners=False)
-                objang_pred = F.interpolate(obj_pose[('obj_angle', k)], [args.inheight, args.inwidth], mode='bilinear', align_corners=False)
-                loss_objscale += torch.sum(torch.abs(objscale_pred - scaleobj_inf) * selector) / (torch.sum(selector) + 1)
-                loss_objang += torch.sum(torch.abs(objang_pred - angobj_inf) * selector) / (torch.sum(selector) + 1)
-            loss_objscale = loss_objscale / 4
-            loss_objang = loss_objang / 4
-
-            loss = loss_self_ang + loss_self_tdir + loss_self_tscale + loss_objscale + loss_objang
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-            scheduler.step()
-
-            total_steps += 1
-
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break

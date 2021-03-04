@@ -79,7 +79,10 @@ class Logger:
             self.writer = SummaryWriter(self.logpath)
 
     def _print_training_status(self):
-        metrics_data = [self.running_loss[k] / SUM_FREQ for k in sorted(self.running_loss.keys())]
+        if self.total_steps < SUM_FREQ:
+            metrics_data = [self.running_loss[k] / (self.total_steps + 1) for k in sorted(self.running_loss.keys())]
+        else:
+            metrics_data = [self.running_loss[k] / SUM_FREQ for k in sorted(self.running_loss.keys())]
         training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps + 1, self.scheduler.get_last_lr()[0])
         metrics_str = ("{:10.4f}, " * len(metrics_data)).format(*metrics_data)
 
