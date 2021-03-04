@@ -17,7 +17,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from exp_VRKitti import VirtualKITTI2
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -29,13 +28,12 @@ import torch.distributed as dist
 from torch.autograd import Variable
 from eppcore import eppcore_inflation, eppcore_compression
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-
 from tqdm import tqdm
-
 from core.utils.utils import tensor2disp, tensor2rgb
-
 from posenet import Posenet
 import copy
+
+from exp_VRKitti.dataset_VRKitti2 import VirtualKITTI2
 
 # exclude extremly large displacements
 MAX_FLOW = 400
