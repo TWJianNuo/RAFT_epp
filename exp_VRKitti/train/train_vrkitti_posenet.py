@@ -1,7 +1,6 @@
 from __future__ import print_function, division
 import os, sys, inspect
 project_rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))))
-print(project_rootdir)
 sys.path.insert(0, project_rootdir)
 sys.path.append('core')
 
@@ -18,7 +17,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from exp_VRKitti.dataset_VRKitti2 import VirtualKITTI2
+from exp_VRKitti import VirtualKITTI2
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
