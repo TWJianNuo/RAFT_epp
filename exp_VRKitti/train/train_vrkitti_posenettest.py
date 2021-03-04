@@ -484,51 +484,10 @@ def train(gpu, ngpus_per_node, args):
 
             loss = loss_self_ang + loss_self_tdir + loss_self_tscale + loss_objscale + loss_objang
 
-            metrics = dict()
-            metrics['loss_self_ang'] = loss_self_ang.float().item()
-            metrics['loss_self_tdir'] = loss_self_tdir.float().item()
-            metrics['loss_self_tscale'] = loss_self_tscale.float().item()
-            metrics['loss_objscale'] = loss_objscale.float().item()
-            metrics['loss_objang'] = loss_objang.float().item()
-
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             scheduler.step()
-
-            if args.gpu == 0:
-                if total_steps % SUM_FREQ == 0:
-                    with torch.no_grad():
-                        objscale_pred = model.module.eppcompress(insmap, obj_pose[('obj_scale', 0)].squeeze(1).unsqueeze(-1).unsqueeze(-1), args.maxinsnum)
-                        objscale_pred = objscale_pred / (insnum + 1e-10)
-
-                        objang_pred = model.module.eppcompress(insmap, obj_pose[('obj_angle', 0)].squeeze(1).unsqueeze(-1).unsqueeze(-1), args.maxinsnum)
-                        objang_pred = objang_pred / (insnum + 1e-10)
-
-                        selfR, selfT, selfRT = model.module.get_selfpose(selfang=self_ang, selftdir=self_tdir, selfscale=self_tscale)
-                        est_objpose = model.module.mvinfo2objpose(objang_pred, objscale_pred, selfRT.unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]))
-
-                        est_allpose = torch.clone(est_objpose)
-                        est_allpose[:, 0, :, :] = selfRT
-
-                        flowpred = model.module.depth2flow(depthmap=depthmap, instance=insmap, intrinsic=intrinsic, t=est_allpose[:, :, 0:3, 3:4], R=est_allpose[:, :, 0:3, 0:3])
-
-                    logger.push(metrics, data_blob, est_objpose, flowpred, selector)
-                else:
-                    logger.push(metrics, None, None, None, None)
-
-            if total_steps % VAL_FREQ == 1:
-                results = validate_VRKitti2(model.module, args, eval_loader, group)
-
-                model.train()
-                if args.gpu == 0:
-                    logger_evaluation.write_dict(results, total_steps)
-
-                    if results['kitti-f1'] < minf1:
-                        minf1 = results['kitti-f1']
-                        PATH = os.path.join(logroot, 'minf1.pth')
-                        torch.save(model.state_dict(), PATH)
-                        print("model saved to %s" % PATH)
 
             total_steps += 1
 
