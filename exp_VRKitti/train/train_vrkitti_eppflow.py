@@ -308,7 +308,9 @@ def train(gpu, ngpus_per_node, args):
             optimizer.step()
             scheduler.step()
 
-            if args.gpu == 0 and total_steps % SUM_FREQ == 0:
+            print(total_steps)
+
+            if args.gpu == 0:
                 logger.push(metrics, data_blob, depth2, selector)
 
             if total_steps % VAL_FREQ == 1:
