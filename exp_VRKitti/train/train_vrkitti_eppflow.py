@@ -262,6 +262,8 @@ def train(gpu, ngpus_per_node, args):
                                    shuffle=(eval_sampler is None), num_workers=0, drop_last=True,
                                    sampler=eval_sampler)
 
+    print("Training split contains %d images, validation split contained %d images" % (len(train_entries), len(evaluation_entries)))
+
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
@@ -305,10 +307,7 @@ def train(gpu, ngpus_per_node, args):
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             scheduler.step()
-
-            if args.gpu == 0:
-                print(loss)
-
+            
             if args.gpu == 0 and total_steps % SUM_FREQ == 0:
                 logger.push(metrics, data_blob, depth2, selector)
 
