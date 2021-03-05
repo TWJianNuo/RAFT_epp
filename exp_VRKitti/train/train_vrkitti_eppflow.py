@@ -307,7 +307,7 @@ def train(gpu, ngpus_per_node, args):
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             scheduler.step()
-            
+
             if args.gpu == 0 and total_steps % SUM_FREQ == 0:
                 logger.push(metrics, data_blob, depth2, selector)
 
@@ -347,7 +347,6 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.00002)
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
-    parser.add_argument('--gpus', type=int, nargs='+', default=[0, 1])
     parser.add_argument('--inheight', type=int, default=288)
     parser.add_argument('--inwidth', type=int, default=960)
     parser.add_argument('--maxinsnum', type=int, default=20)
