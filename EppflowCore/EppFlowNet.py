@@ -325,7 +325,7 @@ class EppFlowNet(nn.Module):
         bz, featurc, featureh, featurew = feature1.shape
         sample_pts = self.get_samplecoords(instance, intrinsic, t, R, pts2d, bz, featureh, featurew)
 
-        feature2_ex = feature2.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1]).view([bz * self.nedges, featurc, featureh, featurew])
+        feature2_ex = feature2.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1]).contiguous().view([bz * self.nedges, featurc, featureh, featurew])
         sampled_feature2 = F.grid_sample(feature2_ex, sample_pts, mode='bilinear', align_corners=False).view([bz, self.nedges, featurc, featureh, featurew]).permute([0, 2, 1, 3, 4])
         feature_volume = torch.cat([feature1.unsqueeze(2).expand([-1, -1, self.nedges, -1, -1]), sampled_feature2], dim=1)
         return feature_volume
