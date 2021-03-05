@@ -308,8 +308,6 @@ def train(gpu, ngpus_per_node, args):
             optimizer.step()
             scheduler.step()
 
-            print(total_steps)
-
             if args.gpu == 0:
                 logger.push(metrics, data_blob, depth2, selector)
 
