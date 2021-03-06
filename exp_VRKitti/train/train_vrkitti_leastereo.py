@@ -30,7 +30,7 @@ from eppcore import eppcore_inflation, eppcore_compression
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from tqdm import tqdm
 from core.utils.utils import tensor2disp, tensor2rgb
-from EppflowCore import EppFlowNet
+from EppflowLEAStereo import LEAStereo
 import copy
 
 from exp_VRKitti.dataset_VRKitti2 import VirtualKITTI2
@@ -69,6 +69,7 @@ class Logger:
     def __init__(self, model, scheduler, logpath):
         self.model = model
         self.scheduler = scheduler
+        self.total_steps = 0
         self.running_loss = {}
         self.logpath = logpath
         self.writer = None
@@ -77,7 +78,38 @@ class Logger:
         if self.writer is None:
             self.writer = SummaryWriter(self.logpath)
 
-    def write_vls(self, data_blob, depth, selector, step):
+    def _print_training_status(self):
+        if self.total_steps < SUM_FREQ:
+            metrics_data = [self.running_loss[k] / (self.total_steps + 1) for k in sorted(self.running_loss.keys())]
+        else:
+            metrics_data = [self.running_loss[k] / SUM_FREQ for k in sorted(self.running_loss.keys())]
+        training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps + 1, self.scheduler.get_last_lr()[0])
+        metrics_str = ("{:10.4f}, " * len(metrics_data)).format(*metrics_data)
+
+        # print the training status
+        print(training_str + metrics_str)
+
+        self.create_summarywriter()
+
+        for k in self.running_loss:
+            self.writer.add_scalar(k, self.running_loss[k] / SUM_FREQ, self.total_steps)
+            self.running_loss[k] = 0.0
+
+    def push(self, metrics, data_blob, depth, selector):
+        for key in metrics:
+            if key not in self.running_loss:
+                self.running_loss[key] = 0.0
+
+            self.running_loss[key] += metrics[key]
+
+        if self.total_steps % SUM_FREQ == 0:
+            self._print_training_status()
+            self.write_vls(data_blob, depth, selector)
+            self.running_loss = {}
+
+        self.total_steps += 1
+
+    def write_vls(self, data_blob, depth, selector):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
@@ -90,24 +122,11 @@ class Logger:
         img_val_up = np.concatenate([np.array(figmask), np.array(insvls)], axis=1)
         img_val_down = np.concatenate([np.array(depthgtvls), np.array(depthpredvls)], axis=1)
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_down)], axis=0)
-        self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-    def write_vls_eval(self, data_blob, depth, selector, evalidx, step):
-        img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        insmap = data_blob['insmap'][0].squeeze().numpy()
-
-        figmask = tensor2disp(selector, vmax=1, viewind=0)
-        insvls = Image.fromarray(vls_ins(img1, insmap))
-
-        depthgtvls = tensor2disp(1 / data_blob['depthmap'], vmax=0.15, viewind=0)
-        depthpredvls = tensor2disp(1 / depth, vmax=0.15, viewind=0)
-
-        img_val_up = np.concatenate([np.array(figmask), np.array(insvls)], axis=1)
-        img_val_down = np.concatenate([np.array(depthgtvls), np.array(depthpredvls)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_down)], axis=0)
-        self.writer.add_image('predvls_eval_{}'.format(str(evalidx).zfill(2)), (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
+        self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), self.total_steps)
 
     def write_dict(self, results, step):
+        self.create_summarywriter()
+
         for key in results:
             self.writer.add_scalar(key, results[key], step)
 
@@ -138,15 +157,11 @@ def compute_errors(gt, pred):
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 @torch.no_grad()
-def validate_VRKitti2(model, args, eval_loader, group, logger, total_steps):
+def validate_VRKitti2(model, args, eval_loader, group):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
     eval_measures_depth = torch.zeros(10).cuda(device=gpu)
-
-    xx, yy = np.meshgrid(range(args.evalwidth), range(args.evalheight), indexing='xy')
-    pts2d = np.stack([xx, yy, np.ones_like(xx)], axis=2)
-    pts2d = torch.from_numpy(pts2d).float().view([1, args.evalheight, args.evalwidth, 3, 1]).cuda(gpu)
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu, non_blocking=True)
         image2 = data_blob['img2'].cuda(gpu, non_blocking=True)
@@ -155,20 +170,16 @@ def validate_VRKitti2(model, args, eval_loader, group, logger, total_steps):
         insmap = data_blob['insmap'].cuda(gpu, non_blocking=True)
         poses = data_blob['poses'].cuda(gpu, non_blocking=True)
 
-        _, pred_depth = model(image1, image2, insmap, intrinsic, poses[:, :, 0:3, 3:4], poses[:, :, 0:3, 0:3], pts2d=pts2d)
-
+        _, pred_depth = model(image1, image2, insmap, intrinsic, poses[:, :, 0:3, 3:4], poses[:, :, 0:3, 0:3])
 
         pred_depth = torch.clamp(pred_depth, min=args.min_depth_eval, max=args.max_depth_eval)
-        valid_mask = (depth_gt > args.min_depth_eval) * (depth_gt < args.max_depth_eval) * (insmap >= 0)
+        valid_mask = (depth_gt > args.min_depth_eval) * (depth_gt < args.max_depth_eval)
         pred_depth_flatten = pred_depth[valid_mask].cpu().numpy()
         depth_gt_flatten = depth_gt[valid_mask].cpu().numpy()
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
         eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
         eval_measures_depth[9] += 1
-
-        if args.gpu == 0 and np.mod(val_id, 50) == 0:
-            logger.write_vls_eval(data_blob, pred_depth, valid_mask, val_id, total_steps)
 
     if args.distributed:
         dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
@@ -217,7 +228,7 @@ def train(gpu, ngpus_per_node, args):
     if args.distributed:
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url, world_size=ngpus_per_node, rank=args.gpu)
 
-    model = EppFlowNet(args)
+    model = LEAStereo(args)
     if args.distributed:
         torch.cuda.set_device(args.gpu)
         args.batch_size = int(args.batch_size / ngpus_per_node)
@@ -239,13 +250,13 @@ def train(gpu, ngpus_per_node, args):
     model.train()
 
     train_entries, evaluation_entries = read_splits()
-    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, istrain=True)
+    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, entries=train_entries, istrain=True)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
 
-    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, istrain=False)
+    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, entries=evaluation_entries, istrain=False)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=0, drop_last=True,
@@ -263,14 +274,11 @@ def train(gpu, ngpus_per_node, args):
     if args.gpu == 0:
         logger = Logger(model, scheduler, logroot)
         logger_evaluation = Logger(model, scheduler, os.path.join(args.logroot, 'evaluation_VRKitti', args.name))
-        logger.create_summarywriter()
-        logger_evaluation.create_summarywriter()
 
-    VAL_FREQ = 500
+    VAL_FREQ = 1000
     maxd1 = 0
     epoch = 0
 
-    st = time.time()
     should_keep_training = True
     while should_keep_training:
 
@@ -301,18 +309,10 @@ def train(gpu, ngpus_per_node, args):
             scheduler.step()
 
             if args.gpu == 0:
-                logger.write_dict(metrics, total_steps)
-                if total_steps % SUM_FREQ == 0:
-                    dr = time.time() - st
-                    resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, depth loss: %f" % (total_steps, resths, loss_depth.item()))
-                    logger.write_vls(data_blob, depth2, selector, total_steps)
+                logger.push(metrics, data_blob, depth2, selector)
 
             if total_steps % VAL_FREQ == 1:
-                if args.gpu == 0:
-                    results = validate_VRKitti2(model.module, args, eval_loader, group, logger, total_steps)
-                else:
-                    results = validate_VRKitti2(model.module, args, eval_loader, group, None, None)
+                results = validate_VRKitti2(model.module, args, eval_loader, group)
 
                 model.train()
                 if args.gpu == 0:
@@ -344,13 +344,25 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='raft', help="name your experiment")
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
 
+    ######### LEStereo params ##################
+    parser.add_argument('--fea_num_layers', type=int, default=6)
+    parser.add_argument('--mat_num_layers', type=int, default=12)
+    parser.add_argument('--fea_filter_multiplier', type=int, default=8)
+    parser.add_argument('--mat_filter_multiplier', type=int, default=8)
+    parser.add_argument('--fea_block_multiplier', type=int, default=4)
+    parser.add_argument('--mat_block_multiplier', type=int, default=4)
+    parser.add_argument('--fea_step', type=int, default=3)
+    parser.add_argument('--mat_step', type=int, default=3)
+    parser.add_argument('--net_arch_fea', default='run/sceneflow/best/architecture/feature_network_path.npy', type=str)
+    parser.add_argument('--cell_arch_fea', default='run/sceneflow/best/architecture/feature_genotype.npy', type=str)
+    parser.add_argument('--net_arch_mat', default='run/sceneflow/best/architecture/matching_network_path.npy', type=str)
+    parser.add_argument('--cell_arch_mat', default='run/sceneflow/best/architecture/matching_genotype.npy', type=str)
+
     parser.add_argument('--lr', type=float, default=0.00002)
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
-    parser.add_argument('--inheight', type=int, default=256)
-    parser.add_argument('--inwidth', type=int, default=960)
-    parser.add_argument('--evalheight', type=int, default=256)
-    parser.add_argument('--evalwidth', type=int, default=960)
+    parser.add_argument('--inheight', type=int, default=288)
+    parser.add_argument('--inwidth', type=int, default=576)
     parser.add_argument('--maxinsnum', type=int, default=20)
     parser.add_argument('--maxscale', type=float, default=10)
 

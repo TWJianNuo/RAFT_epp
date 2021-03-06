@@ -247,11 +247,12 @@ class StereoHead(nn.Module):
         return pred
 
     def forward(self, x, reld_edges):
+        _, _, _, featureh, featurew = x.shape
         x = self.bnrelu(x)
         x = self.relu(self.conv1(x))
         x = self.relu(self.conv2(x))
         x = self.conv3(x).squeeze(1)
-        x = F.interpolate(x, [self.args.inheight, self.args.inwidth], mode='bilinear', align_corners=False)
+        x = F.interpolate(x, [int(featureh * 4), int(featurew * 4)], mode='bilinear', align_corners=False)
         pred = self.soft_argmax(x, reld_edges)
         return pred
 
@@ -331,7 +332,10 @@ class EppFlowNet(nn.Module):
         return feature_volume
 
     def get_samplecoords(self, instance, intrinsic, t, R, pts2d, bz, featureh, featurew):
-        reld_edges = self.reld_edges.expand([bz, -1, self.args.inheight, self.args.inwidth])
+        h = int(featureh * 4)
+        w = int(featurew * 4)
+
+        reld_edges = self.reld_edges.expand([bz, -1, h, w])
         if pts2d is None:
             pts2d = self.pts2d
         pts2d = pts2d.expand([bz, -1, -1, -1, -1])
@@ -346,13 +350,13 @@ class EppFlowNet(nn.Module):
         m1, m2, m3 = torch.split(M_inf, 1, dim=3)
         t1, t2, t3 = torch.split(T_inf, 1, dim=3)
 
-        numx = (m1 @ pts2d).view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1]) * reld_edges
-        numy = (m2 @ pts2d).view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1]) * reld_edges
-        denom = (m3 @ pts2d).view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1]) * reld_edges
+        numx = (m1 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
+        numy = (m2 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
+        denom = (m3 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
 
-        t1 = t1.view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1])
-        t2 = t2.view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1])
-        t3 = t3.view(bz, 1, self.args.inheight, self.args.inwidth).expand([-1, self.nedges, -1, -1])
+        t1 = t1.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
+        t2 = t2.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
+        t3 = t3.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
 
         denomf = (denom + t3)
         sign = denomf.sign()

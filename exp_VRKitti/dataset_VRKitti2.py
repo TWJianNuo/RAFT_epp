@@ -62,12 +62,15 @@ def read_move_info(intrinsic_path, extrinisic_path, objpose_path, scene_name):
     return intrinsic_dict, extrinsic_dict, objpose_dict
 
 class VirtualKITTI2(data.Dataset):
-    def __init__(self, args, root='datasets/KITTI', entries=None, istrain=True):
+    def __init__(self, args, inheight, inwidth, root='datasets/KITTI', entries=None, istrain=True):
         super(data.Dataset, self).__init__()
         self.args = args
         self.root = root
         self.entries = entries
         self.istrain = istrain
+
+        self.inheight = inheight
+        self.inwidth = inwidth
 
         self.intrinsic_dict = dict()
         self.extrinsic_dict = dict()
@@ -83,8 +86,8 @@ class VirtualKITTI2(data.Dataset):
         self.minptsnum = 100
         self.maxinsnum = self.args.maxinsnum
 
-        featurew = int(self.args.inwidth / 4)
-        featureh = int(self.args.inheight / 4)
+        featurew = int(self.inwidth / 4)
+        featureh = int(self.inheight / 4)
         xx, yy = np.meshgrid(range(featurew), range(featureh), indexing='xy')
         xx = (xx / featurew - 0.5) * 2
         yy = (yy / featureh - 0.5) * 2
@@ -139,8 +142,9 @@ class VirtualKITTI2(data.Dataset):
         else:
             h, w = img1.shape
 
-        crph = self.args.inheight
-        crpw = self.args.inwidth
+        crph = self.inheight
+        crpw = self.inwidth
+
         if self.istrain:
             left = np.random.randint(0, w - crpw - 1, 1).item()
         else:
@@ -150,11 +154,11 @@ class VirtualKITTI2(data.Dataset):
         intrinsic[0, 2] -= left
         intrinsic[1, 2] -= top
 
-        img1 = self.crop_img(img1, left=left, top=top, crph=self.args.inheight, crpw=self.args.inwidth)
-        img2 = self.crop_img(img2, left=left, top=top, crph=self.args.inheight, crpw=self.args.inwidth)
-        flowmap = self.crop_img(flowmap, left=left, top=top, crph=self.args.inheight, crpw=self.args.inwidth)
-        depthmap = self.crop_img(depthmap, left=left, top=top, crph=self.args.inheight, crpw=self.args.inwidth)
-        instancemap = self.crop_img(instancemap, left=left, top=top, crph=self.args.inheight, crpw=self.args.inwidth)
+        img1 = self.crop_img(img1, left=left, top=top, crph=crph, crpw=crpw)
+        img2 = self.crop_img(img2, left=left, top=top, crph=crph, crpw=crpw)
+        flowmap = self.crop_img(flowmap, left=left, top=top, crph=crph, crpw=crpw)
+        depthmap = self.crop_img(depthmap, left=left, top=top, crph=crph, crpw=crpw)
+        instancemap = self.crop_img(instancemap, left=left, top=top, crph=crph, crpw=crpw)
 
         return img1, img2, flowmap, depthmap, instancemap, intrinsic
 
@@ -185,7 +189,7 @@ class VirtualKITTI2(data.Dataset):
         # self.validate_mvinfo(img1, img2, depthmap, instancemap, intrinsic, relpose, obj_poses, obj_approxposes, flowmap, index)
 
         renamed_ins, renamed_poses, renamed_ang, renamed_scale = self.rename_instancemap(instancemap, flowmap, relpose, obj_approxposes, obj_approxmv)
-        renamed_ins_featuresize = F.grid_sample(torch.from_numpy(renamed_ins).float().view([1, 1, self.args.inheight, self.args.inwidth]), self.sample_pts.unsqueeze(0), mode='nearest', align_corners=True)
+        renamed_ins_featuresize = F.grid_sample(torch.from_numpy(renamed_ins).float().view([1, 1, self.inheight, self.inwidth]), self.sample_pts.unsqueeze(0), mode='nearest', align_corners=True)
         renamed_ins_featuresize = renamed_ins_featuresize.squeeze().int().numpy()
 
         intrinsic_resize = np.eye(4)
