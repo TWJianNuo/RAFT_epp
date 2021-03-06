@@ -2,7 +2,6 @@ from __future__ import print_function, division
 import os, sys, inspect
 project_rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))))
 sys.path.insert(0, project_rootdir)
-sys.path.append('core')
 
 import argparse
 import os
@@ -160,6 +159,7 @@ def validate_VRKitti2(model, args, eval_loader, group, logger, total_steps):
 
         pred_depth = torch.clamp(pred_depth, min=args.min_depth_eval, max=args.max_depth_eval)
         valid_mask = (depth_gt > args.min_depth_eval) * (depth_gt < args.max_depth_eval) * (insmap >= 0)
+        valid_mask[:, :, 0:args.evalheight-256, :] = 0
         pred_depth_flatten = pred_depth[valid_mask].cpu().numpy()
         depth_gt_flatten = depth_gt[valid_mask].cpu().numpy()
 
