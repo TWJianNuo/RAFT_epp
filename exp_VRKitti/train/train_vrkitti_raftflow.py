@@ -26,7 +26,6 @@ from core.utils.utils import InputPadder, forward_interpolate
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.autograd import Variable
-from eppcore import eppcore_inflation, eppcore_compression
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from tqdm import tqdm
 from core.utils.utils import tensor2disp, tensor2rgb
