@@ -166,7 +166,7 @@ def validate_VRKitti2(model, args, eval_loader, iters, group, logger, total_step
         eval_epe[0] += torch.sum(torch.sum(epe * valid, dim=[1, 2, 3]) / torch.sum(valid, dim=[1, 2, 3]))
         eval_epe[1] += image1.shape[0]
 
-        if not(logger is None) and np.mod(val_id, 40) == 0:
+        if not(logger is None) and np.mod(val_id, 20) == 0:
             logger.write_vls_eval(data_blob, flow_pr, valid, val_id, total_steps)
 
     if args.distributed:
