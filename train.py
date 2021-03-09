@@ -177,7 +177,6 @@ def train(args):
     add_noise = True
 
     should_keep_training = True
-    evaluate.validate_kitti(model.module, args)
     while should_keep_training:
 
         for i_batch, data_blob in enumerate(train_loader):
