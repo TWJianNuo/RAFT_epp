@@ -283,7 +283,7 @@ def train(gpu, ngpus_per_node, args):
             logger_evaluation.create_summarywriter()
             logger_evaluations[num_iters] = logger_evaluation
 
-    VAL_FREQ = 1500
+    VAL_FREQ = 2000
     maxout = 1
     epoch = 0
 
