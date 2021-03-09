@@ -92,18 +92,18 @@ class Logger:
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_down)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
-    def write_vls_eval(self, data_blob, depth, selector, evalidx, step):
+    def write_vls_eval(self, data_blob, flowpred, selector, evalidx, step):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
         figmask = tensor2disp(selector, vmax=1, viewind=0)
         insvls = Image.fromarray(vls_ins(img1, insmap))
 
-        depthgtvls = tensor2disp(1 / data_blob['depthmap'], vmax=0.15, viewind=0)
-        depthpredvls = tensor2disp(1 / depth, vmax=0.15, viewind=0)
+        flowgtvls = Image.fromarray(flow_to_image(data_blob['flowmap'][0].permute([1, 2, 0]).numpy(), rad_max=10))
+        flowpredvls = Image.fromarray(flow_to_image(flowpred[0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=10))
 
         img_val_up = np.concatenate([np.array(figmask), np.array(insvls)], axis=1)
-        img_val_down = np.concatenate([np.array(depthgtvls), np.array(depthpredvls)], axis=1)
+        img_val_down = np.concatenate([np.array(flowgtvls), np.array(flowpredvls)], axis=1)
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_down)], axis=0)
         self.writer.add_image('predvls_eval_{}'.format(str(evalidx).zfill(2)), (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
@@ -300,7 +300,7 @@ def train(gpu, ngpus_per_node, args):
 
             # exlude invalid pixels and extremely large diplacements
             mag = torch.sum(flow ** 2, dim=1).sqrt()
-            valid = ((flow[:, 0] > 0) * (flow[:, 1] > 0) * (mag < MAX_FLOW)).unsqueeze(1)
+            valid = ((flow[:, 0] != 0) * (flow[:, 1] != 0) * (mag < MAX_FLOW)).unsqueeze(1)
 
             flow_predictions = model(image1, image2, iters=args.iters)
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
