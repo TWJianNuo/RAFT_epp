@@ -325,9 +325,9 @@ def train(gpu, ngpus_per_node, args):
                 for num_iters in range(args.iters, args.iters * 2 + 1, VAL_ITERINC):
 
                     if args.gpu == 0 and num_iters == 24:
-                        results = validate_VRKitti2(model.module, args, eval_loader, args.iters, group, logger, total_steps)
+                        results = validate_VRKitti2(model.module, args, eval_loader, num_iters, group, logger, total_steps)
                     else:
-                        results = validate_VRKitti2(model.module, args, eval_loader, args.iters, group, None, None)
+                        results = validate_VRKitti2(model.module, args, eval_loader, num_iters, group, None, None)
 
                     if args.gpu == 0:
                         logger_evaluations[num_iters].write_dict(results, total_steps)
