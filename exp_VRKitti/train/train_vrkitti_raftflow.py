@@ -260,7 +260,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, istrain=False)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
-                                   shuffle=(eval_sampler is None), num_workers=0, drop_last=True,
+                                   shuffle=(eval_sampler is None), num_workers=2, drop_last=True,
                                    sampler=eval_sampler)
 
     print("Training split contains %d images, validation split contained %d images" % (len(train_entries), len(evaluation_entries)))
