@@ -415,13 +415,13 @@ def train(gpu, ngpus_per_node, args):
     model.train()
 
     train_entries, evaluation_entries = read_splits()
-    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, entries=train_entries, istrain=True)
+    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, isapproxpose=True, entries=train_entries, istrain=True)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
 
-    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, entries=evaluation_entries, istrain=False)
+    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, isapproxpose=True, entries=evaluation_entries, istrain=False)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=4, drop_last=True,
@@ -559,8 +559,9 @@ if __name__ == '__main__':
     parser.add_argument('--gpus', type=int, nargs='+', default=[0, 1])
     parser.add_argument('--inheight', type=int, default=288)
     parser.add_argument('--inwidth', type=int, default=960)
+    parser.add_argument('--evalheight', type=int, default=288)
+    parser.add_argument('--evalwidth', type=int, default=960)
     parser.add_argument('--maxinsnum', type=int, default=20)
-    parser.add_argument('--maxscale', type=float, default=10)
 
     parser.add_argument('--tscale_range', type=float, default=3)
     parser.add_argument('--objtscale_range', type=float, default=10)

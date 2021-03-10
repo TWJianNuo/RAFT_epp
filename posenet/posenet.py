@@ -372,12 +372,6 @@ class Posenet(nn.Module):
         flowy = py.squeeze(1) - self.pts2d[:, :, :, 1, 0]
 
         flowpred = torch.stack([flowx, flowy], dim=1)
-
-        # rndckx = np.random.randint(0, self.args.inwidth)
-        # rndcky = np.random.randint(0, self.args.inheight)
-        # rndd = depthmap[0, 0, rndcky, rndckx].item()
-        # self.pts2d[0, rndcky, rndckx, 0, 0].item()
-        # self.pts2d[0, rndcky, rndckx, 1, 0].item()
         return flowpred
 
     def forward(self, img1, img2):
