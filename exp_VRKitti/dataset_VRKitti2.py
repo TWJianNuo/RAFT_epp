@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from core.utils.frame_utils import read_gen, readFlowVRKitti
 import torch.nn.functional as F
 from torchvision.transforms import ColorJitter
+import copy
 
 def read_splits(project_rootdir):
     split_root = os.path.join(project_rootdir, 'exp_VRKitti', 'splits')
@@ -62,12 +63,13 @@ def read_move_info(intrinsic_path, extrinisic_path, objpose_path, scene_name):
     return intrinsic_dict, extrinsic_dict, objpose_dict
 
 class VirtualKITTI2(data.Dataset):
-    def __init__(self, args, inheight, inwidth, root='datasets/KITTI', entries=None, istrain=True):
+    def __init__(self, args, inheight, inwidth, isapproxpose, root='datasets/KITTI', entries=None, istrain=True):
         super(data.Dataset, self).__init__()
         self.args = args
         self.root = root
         self.entries = entries
         self.istrain = istrain
+        self.isapproxpose = isapproxpose
 
         self.inheight = inheight
         self.inwidth = inwidth
@@ -188,7 +190,11 @@ class VirtualKITTI2(data.Dataset):
         relpose, obj_poses, obj_approxmv, obj_approxposes = self.get_mvinfo(index, instancemap)
         # self.validate_mvinfo(img1, img2, depthmap, instancemap, intrinsic, relpose, obj_poses, obj_approxposes, flowmap, index)
 
-        renamed_ins, renamed_poses, renamed_ang, renamed_scale = self.rename_instancemap(instancemap, flowmap, relpose, obj_approxposes, obj_approxmv)
+        if self.isapproxpose:
+            renamed_ins, renamed_poses, renamed_ang, renamed_scale = self.rename_instancemap(instancemap, flowmap, relpose, obj_approxposes, obj_approxmv)
+        else:
+            renamed_ins, renamed_poses, renamed_ang, renamed_scale = self.rename_instancemap(instancemap, flowmap, relpose, obj_poses, obj_approxmv)
+
         renamed_ins_featuresize = F.grid_sample(torch.from_numpy(renamed_ins).float().view([1, 1, self.inheight, self.inwidth]), self.sample_pts.unsqueeze(0), mode='nearest', align_corners=True)
         renamed_ins_featuresize = renamed_ins_featuresize.squeeze().int().numpy()
 
@@ -593,7 +599,7 @@ class VirtualKITTI2(data.Dataset):
         scene_name = "Scene{}_{}".format(sceneidx.zfill(2), envn)
 
         intrinsic_key = "{}_frm{}_cam{}".format(scene_name, str(frmidx).zfill(5), camidx)
-        intrinsic = self.intrinsic_dict[intrinsic_key]
+        intrinsic = copy.deepcopy(self.intrinsic_dict[intrinsic_key])
 
         return img1, img2, flowmap, depthmap, instancemap, intrinsic
 

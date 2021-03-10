@@ -239,13 +239,13 @@ def train(gpu, ngpus_per_node, args):
     model.train()
 
     train_entries, evaluation_entries = read_splits()
-    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, istrain=True)
+    train_dataset = VirtualKITTI2(args=args, root=args.dataset_root, isapproxpose=False, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, istrain=True)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(train_sampler is None), num_workers=args.num_workers, drop_last=True,
                                    sampler=train_sampler)
 
-    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, istrain=False)
+    eval_dataset = VirtualKITTI2(args=args, root=args.dataset_root, isapproxpose=False, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, istrain=False)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=False,
                                    shuffle=(eval_sampler is None), num_workers=0, drop_last=True,

@@ -120,7 +120,7 @@ class RAFT(nn.Module):
         for itr in range(iters):
             coords1 = coords1.detach()
 
-            corr, coords_lvl, delta_lvl = corr_fn(coords1, mag, self.args.samplewindowr) # index correlation volume
+            corr, coords_lvl, delta_lvl = corr_fn(coords1, torch.ones_like(mag), self.args.samplewindowr) # index correlation volume
 
             if itr == 0:
                 coords_lvl_vls = coords_lvl
