@@ -183,9 +183,9 @@ class MDiRaft(nn.Module):
         bz, _, h, w = image1.shape
         mDdoutputs = self.mDd(image1)
         if depthmap is None:
-            initflow = self.depth2flow(mDdoutputs[('mDepth', 0)], pMImg)
+            initflow = self.depth2flow(mDdoutputs[('mDepth', 0)], pMImg).detach()
         else:
-            initflow = self.depth2flow(depthmap, pMImg)
+            initflow = self.depth2flow(depthmap, pMImg).detach()
         initflow_ds = F.interpolate(initflow, [int(h / dsratio), int(w / dsratio)], mode='nearest') / dsratio
 
         # check code for downsample
