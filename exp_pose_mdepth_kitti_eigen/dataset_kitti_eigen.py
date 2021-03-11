@@ -187,8 +187,8 @@ class KITTI_eigen(data.Dataset):
             if not os.path.exists(depthpath):
                 continue
 
-            if not os.path.exists(inspath):
-                continue
+            # if not os.path.exists(inspath):
+            #     continue
 
             if not os.path.exists(img2path):
                 self.image_list.append([img1path, img1path])
