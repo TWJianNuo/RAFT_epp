@@ -9,8 +9,12 @@ import os
 import cv2
 import time
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+
 
 import torch
 import torch.nn as nn
@@ -500,7 +504,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
-    parser.add_argument('--gpus', type=int, nargs='+', default=[0, 1])
     parser.add_argument('--inheight', type=int, default=288)
     parser.add_argument('--inwidth', type=int, default=960)
     parser.add_argument('--evalheight', type=int, default=288)
