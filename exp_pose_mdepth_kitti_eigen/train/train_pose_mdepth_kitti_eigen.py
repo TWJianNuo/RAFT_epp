@@ -302,7 +302,7 @@ class PoseMDNet(nn.Module):
             pM = intrinsic_ex @ predposes @ torch.inverse(intrinsic_ex)
             pMImg = self.posemodel.eppinflate(insmap, pM)
 
-            mDepth = F.interpolate(outputs['mDepth', k], [h, w], align_corners=False, mode='bilinear').squeeze(1)
+            mDepth = F.interpolate(outputs['mDepth', k].detach(), [h, w], align_corners=False, mode='bilinear').squeeze(1)
             pts3d = torch.stack([xx * mDepth, yy * mDepth, mDepth, ones], dim=-1).unsqueeze(-1)
             pts2dp = pMImg @ pts3d
 
