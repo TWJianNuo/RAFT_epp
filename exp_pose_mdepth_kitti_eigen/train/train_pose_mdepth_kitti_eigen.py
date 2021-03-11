@@ -451,11 +451,6 @@ def train(gpu, ngpus_per_node, args):
             optimizer.step()
             scheduler.step()
 
-            dr = time.time() - st
-            resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-            print("Step: %d, rest hour: %f, depthloss: %f, poseloss: %f, flowloss: %f, ssimloss: %f" % (
-            total_steps, resths, depthloss.item(), poseloss.item(), flowloss.item(), ssimloss.item()))
-
             if args.gpu == 0:
                 logger.write_dict(metrics, step=total_steps)
                 if total_steps % SUM_FREQ == 0:
