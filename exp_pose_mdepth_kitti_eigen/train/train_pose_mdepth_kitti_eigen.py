@@ -303,7 +303,7 @@ class PoseMDNet(nn.Module):
             pM = intrinsic_ex @ predposes @ torch.inverse(intrinsic_ex)
             pMImg = self.posemodel.eppinflate(insmap, pM)
 
-            mDepth = F.interpolate(outputs['mDepth', k].detach(), [h, w], align_corners=False, mode='bilinear').squeeze(1)
+            mDepth = F.interpolate(outputs['mDepth', k], [h, w], align_corners=False, mode='bilinear').squeeze(1)
             pts3d = torch.stack([xx * mDepth, yy * mDepth, mDepth, ones], dim=-1).unsqueeze(-1)
             pts2dp = pMImg @ pts3d
 
@@ -334,7 +334,7 @@ def get_depth_loss(depthgt, outputs):
     depthloss = 0
     for k in range(4):
         mDepthpred = F.interpolate(outputs[('mDepth', k)], [h, w], mode='bilinear', align_corners=False)
-        depthloss += torch.sum(mDepthpred * selector) / (torch.sum(selector) + 1)
+        depthloss += torch.sum(torch.abs(mDepthpred - depthgt) * selector) / (torch.sum(selector) + 1)
 
     depthloss = depthloss / 4
     return depthloss
@@ -450,7 +450,7 @@ def train(gpu, ngpus_per_node, args):
             metrics['flowloss'] = flowloss.item()
             metrics['ssimloss'] = ssimloss.item()
 
-            loss = depthloss + (poseloss + flowloss + ssimloss) * 0
+            loss = depthloss + poseloss + flowloss + ssimloss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
