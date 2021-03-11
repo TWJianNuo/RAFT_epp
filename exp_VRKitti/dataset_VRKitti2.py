@@ -217,8 +217,8 @@ class VirtualKITTI2(data.Dataset):
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
         flowmap = torch.from_numpy(flowmap).permute([2, 0, 1]).float()
         depthmap = torch.from_numpy(depthmap).unsqueeze(0).float()
-        intrinsic = torch.from_numpy(intrinsic).float()[0:3, 0:3]
-        intrinsic_resize = torch.from_numpy(intrinsic_resize).float()[0:3, 0:3]
+        intrinsic = torch.from_numpy(intrinsic).float()
+        intrinsic_resize = torch.from_numpy(intrinsic_resize).float()
         renamed_ins = torch.from_numpy(renamed_ins).unsqueeze(0).int()
         renamed_ins_featuresize = torch.from_numpy(renamed_ins_featuresize).unsqueeze(0).int()
         renamed_poses_pad = torch.zeros([self.maxinsnum, 4, 4], dtype=torch.float)

@@ -260,7 +260,7 @@ class Posenet(nn.Module):
         ang2RM_obj[0, 3, 0, 0] = 1
         ang2RM_obj[2, 3, 0, 1] = -1
 
-        ang2RM_obj = ang2RM_obj.view([1, 1, 4, 4, 1, 2]).expand([-1, self.args.maxinsnum, -1, -1, -1, -1])
+        ang2RM_obj = ang2RM_obj.view([1, 1, 4, 4, 1, 2])
         self.ang2RM_obj = torch.nn.Parameter(ang2RM_obj, requires_grad=False)
 
         rotcomp_obj = torch.zeros([4, 4])
@@ -268,16 +268,25 @@ class Posenet(nn.Module):
         rotcomp_obj[1, 1] = 1
         rotcomp_obj[2, 2] = 1
         rotcomp_obj[3, 3] = 1
-        rotcomp_obj = rotcomp_obj.view([1, 1, 4, 4]).expand([-1, self.args.maxinsnum, -1, -1])
+        rotcomp_obj = rotcomp_obj.view([1, 1, 4, 4])
         self.rotcomp_obj = torch.nn.Parameter(rotcomp_obj, requires_grad=False)
 
-    def mvinfo2objpose(self, ang, scale, selfpose):
-        bz, maxins, _, _ = ang.shape
-        cos_sin = torch.cat([torch.cos(ang), torch.sin(ang)], dim=2).view([bz, maxins, 1, 1, 2, 1]).expand([-1, -1, 4, 4, -1, -1])
+    def mvinfo2objpose(self, objang, objscale, selfpose):
+        bz, maxins, _, _ = objang.shape
+        cos_sin = torch.cat([torch.cos(objang), torch.sin(objang)], dim=2).view([bz, maxins, 1, 1, 2, 1]).expand([-1, -1, 4, 4, -1, -1])
 
-        M = (self.ang2RM_obj.expand([bz, -1, -1, -1, -1, -1]) @ cos_sin).squeeze(-1).squeeze(-1) * scale + self.rotcomp_obj
-        objpose = M @ selfpose
-        return objpose
+        ang2RM_obj = self.ang2RM_obj.expand([bz, maxins, -1, -1, -1, -1])
+        rotcomp_obj = self.rotcomp_obj.expand([bz, maxins, -1, -1])
+
+        M = (ang2RM_obj @ cos_sin).squeeze(-1).squeeze(-1) * objscale + rotcomp_obj
+        objpose = M @ selfpose.unsqueeze(1).expand([-1, maxins, -1, -1])
+
+        if maxins > 1:
+            _, robjposes = torch.split(objpose, [1, maxins-1], dim=1)
+            poses = torch.cat([selfpose.unsqueeze(1), robjposes], dim=1)
+        else:
+            poses = objpose * 0 + selfpose.unsqueeze(1)
+        return poses
 
     def init_ang2RM_self(self):
         ang2RMx = torch.zeros([3, 3, 6])
@@ -333,7 +342,7 @@ class Posenet(nn.Module):
         selfRT = torch.eye(4, device=selfang.device)
         selfRT = selfRT.view([1, 4, 4]).repeat([bz, 1, 1])
         selfRT[:, 0:3, :] = torch.cat([selfR, selfT], dim=2)
-        return selfR, selfT, selfRT
+        return selfRT
 
     def depth2flow(self, depthmap, instance, intrinsic, t, R, pts2d=None):
         bz, _, h, w = depthmap.shape
@@ -379,7 +388,7 @@ class Posenet(nn.Module):
 
         features = self.encoder(img)
 
-        ang, tdir, tscale = self.self_pose_decoder([features])
+        self_ang, self_tdir, self_tscale = self.self_pose_decoder([features])
         obj_pose = self.obj_pose_decoder(features)
 
-        return ang, tdir, tscale, obj_pose
+        return self_ang, self_tdir, self_tscale, obj_pose

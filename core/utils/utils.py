@@ -4,6 +4,7 @@ import numpy as np
 from scipy import interpolate
 import PIL.Image as Image
 import matplotlib.pyplot as plt
+import copy
 
 class InputPadder:
     """ Pads images such that dimensions are divisible by 8 """
@@ -117,3 +118,23 @@ def tensor2rgb(tensor, viewind=0):
         tnp = tnp * 255
     tnp = np.clip(tnp, a_min=0, a_max=255).astype(np.uint8)
     return Image.fromarray(tnp)
+
+def vls_ins(rgb, anno):
+    rgbc = copy.deepcopy(rgb)
+    r = rgbc[:, :, 0].astype(np.float)
+    g = rgbc[:, :, 1].astype(np.float)
+    b = rgbc[:, :, 2].astype(np.float)
+    for i in np.unique(anno):
+        if i > 0:
+            rndc = np.random.randint(0, 255, 3).astype(np.float)
+            selector = anno == i
+            r[selector] = rndc[0] * 0.25 + r[selector] * 0.75
+            g[selector] = rndc[1] * 0.25 + g[selector] * 0.75
+            b[selector] = rndc[2] * 0.25 + b[selector] * 0.75
+    rgbvls = np.stack([r, g, b], axis=2)
+    rgbvls = np.clip(rgbvls, a_max=255, a_min=0).astype(np.uint8)
+    return Image.fromarray(rgbvls)
+
+def tensor2rgb(tensor, ind):
+    slice = (tensor[ind, :, :, :].permute(1,2,0).detach().contiguous().cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(slice)
