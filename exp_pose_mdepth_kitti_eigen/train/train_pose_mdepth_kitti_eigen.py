@@ -126,13 +126,14 @@ class Logger:
         insvls = vls_ins(img1, insmap)
 
         depthpredvls = tensor2disp(1 / outputs[('mDepth', 0)], vmax=0.15, viewind=0)
+        depthgtvls = tensor2disp(1 / data_blob[('depthmap', 0)], vmax=0.15, viewind=0)
         flowvls = flow_to_image(outputs[('flowpred', 0)][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=10)
         imgrecon = tensor2rgb(outputs[('reconImg', 0)], ind=0)
 
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
         img_val_mid1 = np.concatenate([np.array(figmask_flow), np.array(figmask_reprojection)], axis=1)
-        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(flowvls)], axis=1)
-        img_val_mid3 = np.concatenate([np.array(img1), np.array(imgrecon)], axis=1)
+        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(depthgtvls)], axis=1)
+        img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(flowvls)], axis=1)
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid1), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
@@ -449,7 +450,7 @@ def train(gpu, ngpus_per_node, args):
             metrics['flowloss'] = flowloss.item()
             metrics['ssimloss'] = ssimloss.item()
 
-            loss = depthloss + poseloss + flowloss + ssimloss
+            loss = depthloss + (poseloss + flowloss + ssimloss) * 0
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
