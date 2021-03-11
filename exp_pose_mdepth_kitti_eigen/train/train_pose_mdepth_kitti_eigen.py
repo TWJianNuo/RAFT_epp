@@ -253,8 +253,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
 
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
-    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     return train_entries, evaluation_entries
 
@@ -396,13 +395,15 @@ def train(gpu, ngpus_per_node, args):
     train_entries, evaluation_entries = read_splits()
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries,
-                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, ins_root=args.ins_root, istrain=True, muteaug=True)
+                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, ins_root=args.ins_root, istrain=True, muteaug=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, ins_root=args.ins_root, istrain=False)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
+
+    print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
 
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
