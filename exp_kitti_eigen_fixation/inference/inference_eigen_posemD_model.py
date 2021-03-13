@@ -178,9 +178,6 @@ def train(gpu, ngpus_per_node, args):
         model = torch.nn.DataParallel(model)
         model.cuda()
 
-    logroot = os.path.join(args.logroot, args.name)
-    print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
-
     if args.restore_ckpt is not None:
         print("=> loading checkpoint '{}'".format(args.restore_ckpt))
         loc = 'cuda:{}'.format(args.gpu)
@@ -288,10 +285,6 @@ if __name__ == '__main__':
 
     torch.manual_seed(1234)
     np.random.seed(1234)
-
-    if not os.path.isdir(os.path.join(args.logroot, args.name)):
-        os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
-    os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
 
     torch.cuda.empty_cache()
 
