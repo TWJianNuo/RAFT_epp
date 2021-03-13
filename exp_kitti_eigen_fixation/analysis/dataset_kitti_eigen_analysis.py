@@ -213,6 +213,7 @@ class KITTI_eigen(data.Dataset):
             dupentry.append("{} {}".format(seq, index.zfill(10)))
 
         removed = list(set(dupentry))
+        removed.sort()
         return removed
 
     def colorjitter(self, img1, img2):

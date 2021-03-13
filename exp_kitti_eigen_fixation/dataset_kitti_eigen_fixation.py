@@ -22,6 +22,7 @@ from torchvision.transforms import ColorJitter
 from core.utils.semantic_labels import Label
 import time
 import cv2
+import pickle
 
 def latlonToMercator(lat,lon,scale):
     er = 6378137
@@ -143,16 +144,18 @@ def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
     return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
 
 class KITTI_eigen(data.Dataset):
-    def __init__(self, entries, inheight, inwidth, root='datasets/KITTI', depth_root=None, depthvls_root=None, ins_root=None, istrain=True, muteaug=False):
+    def __init__(self, entries, inheight, inwidth, maxinsnum, root='datasets/KITTI', depth_root=None, depthvls_root=None, ins_root=None, prediction_root=None, istrain=True, muteaug=False):
         super(KITTI_eigen, self).__init__()
         self.istrain = istrain
         self.muteaug = muteaug
         self.root = root
         self.depth_root = depth_root
         self.depthvls_root = depthvls_root
+        self.prediction_root = prediction_root
         self.ins_root = ins_root
         self.inheight = inheight
         self.inwidth = inwidth
+        self.maxinsnum = maxinsnum
 
         self.photo_aug = ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.25/3.14)
         self.asymmetric_color_aug_prob = 0.2
@@ -163,6 +166,8 @@ class KITTI_eigen(data.Dataset):
         self.intrinsic_list = list()
         self.pose_list = list()
         self.inspred_list = list()
+        self.predDepthpath_list = list()
+        self.predPosepath_list = list()
 
         self.entries = list()
 
@@ -174,6 +179,9 @@ class KITTI_eigen(data.Dataset):
             img2path = os.path.join(root, seq, 'image_02', 'data', "{}.png".format(str(index + 1).zfill(10)))
             depthpath = os.path.join(depth_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
             depthvlspath = os.path.join(depthvls_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
+
+            predDepthpath = os.path.join(prediction_root, seq, 'image_02/depthpred', "{}.png".format(str(index).zfill(10)))
+            predPosepath = os.path.join(prediction_root, seq, 'image_02/posepred', "{}.pickle".format(str(index).zfill(10)))
 
             # Load Intrinsic for each frame
             calib_dir = os.path.join(root, seq.split('/')[0])
@@ -188,7 +196,10 @@ class KITTI_eigen(data.Dataset):
                 continue
 
             if not os.path.exists(inspath):
-                raise Exception("instance file %f missing" % inspath)
+                raise Exception("instance file %s missing" % inspath)
+
+            if not os.path.exists(predDepthpath) or not os.path.exists(predPosepath):
+                continue
 
             if not os.path.exists(img2path):
                 self.image_list.append([img1path, img1path])
@@ -203,6 +214,8 @@ class KITTI_eigen(data.Dataset):
             self.entries.append(entry)
             self.depth_list.append(depthpath)
             self.depthvls_list.append(depthvlspath)
+            self.predDepthpath_list.append(predDepthpath)
+            self.predPosepath_list.append(predPosepath)
 
         assert len(self.intrinsic_list) == len(self.inspred_list) == len(self.entries) == len(self.depth_list) == len(self.image_list) == len(self.pose_list)
 
@@ -213,6 +226,7 @@ class KITTI_eigen(data.Dataset):
             dupentry.append("{} {}".format(seq, index.zfill(10)))
 
         removed = list(set(dupentry))
+        removed.sort()
         return removed
 
     def colorjitter(self, img1, img2):
@@ -240,19 +254,37 @@ class KITTI_eigen(data.Dataset):
         inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
         flowgt = self.get_gt_flow(depth=depth, valid=(inspred==0) * (depth>0), intrinsic=intrinsic, rel_pose=rel_pose)
 
-        img1, img2, flowgt, depth, depthvls, inspred, intrinsic = self.aug_crop(img1, img2, flowgt, depth, depthvls, inspred, intrinsic)
+        depthpred = np.array(Image.open(self.predDepthpath_list[index])).astype(np.float32) / 256.0
+        posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
+        inspred, posepred = self.pad_clip_ins(insmap=inspred, posepred=posepred)
+
+        img1, img2, flowgt, depth, depthvls, depthpred, inspred, intrinsic = self.aug_crop(img1, img2, flowgt, depth, depthvls, depthpred, inspred, intrinsic)
         if self.istrain and not self.muteaug:
             img1, img2 = self.colorjitter(img1, img2)
 
-        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, depthmap=depth, depthvls=depthvls, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, tag=self.entries[index])
+        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, depthmap=depth, depthvls=depthvls, depthpred=depthpred, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, tag=self.entries[index])
         return data_blob
 
-    def wrapup(self, img1, img2, flowmap, depthmap, depthvls, intrinsic, insmap, rel_pose, tag):
+    def pad_clip_ins(self, insmap, posepred):
+        posepred_pad = np.zeros([self.maxinsnum, 4, 4])
+        currentins = posepred.shape[0]
+
+        if currentins > self.maxinsnum:
+            for k in range(self.maxinsnum, currentins):
+                insmap[insmap == k] = 0
+            posepred_pad = posepred[0:self.maxinsnum]
+        else:
+            posepred_pad[0:currentins] = posepred
+        return insmap, posepred_pad
+
+    def wrapup(self, img1, img2, flowmap, depthmap, depthvls, depthpred, intrinsic, insmap, rel_pose, posepred, tag):
         img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
         flowmap = torch.from_numpy(flowmap).permute([2, 0, 1]).float()
         depthmap = torch.from_numpy(depthmap).unsqueeze(0).float()
         depthvls = torch.from_numpy(depthvls).unsqueeze(0).float()
+        depthpred = torch.from_numpy(depthpred).unsqueeze(0).float()
+        posepred = torch.from_numpy(posepred).float()
         intrinsic = torch.from_numpy(intrinsic).float()
         rel_pose = torch.from_numpy(rel_pose).float()
         insmap = torch.from_numpy(insmap).unsqueeze(0).int()
@@ -263,9 +295,11 @@ class KITTI_eigen(data.Dataset):
         data_blob['flowmap'] = flowmap
         data_blob['depthmap'] = depthmap
         data_blob['depthvls'] = depthvls
+        data_blob['depthpred'] = depthpred
         data_blob['intrinsic'] = intrinsic
         data_blob['insmap'] = insmap
         data_blob['rel_pose'] = rel_pose
+        data_blob['posepred'] = posepred
         data_blob['tag'] = tag
 
         return data_blob
@@ -274,7 +308,7 @@ class KITTI_eigen(data.Dataset):
         img_cropped = img[top:top+crph, left:left+crpw]
         return img_cropped
 
-    def aug_crop(self, img1, img2, flowmap, depthmap, depthvls, instancemap, intrinsic):
+    def aug_crop(self, img1, img2, flowmap, depthmap, depthvls, depthpred, instancemap, intrinsic):
         if img1.ndim == 3:
             h, w, _ = img1.shape
         else:
@@ -304,9 +338,10 @@ class KITTI_eigen(data.Dataset):
         flowmap = self.crop_img(flowmap, left=left, top=top, crph=crph, crpw=crpw)
         depthmap = self.crop_img(depthmap, left=left, top=top, crph=crph, crpw=crpw)
         depthvls = self.crop_img(depthvls, left=left, top=top, crph=crph, crpw=crpw)
+        depthpred = self.crop_img(depthpred, left=left, top=top, crph=crph, crpw=crpw)
         instancemap = self.crop_img(instancemap, left=left, top=top, crph=crph, crpw=crpw)
 
-        return img1, img2, flowmap, depthmap, depthvls, instancemap, intrinsic
+        return img1, img2, flowmap, depthmap, depthvls, depthpred, instancemap, intrinsic
 
     def get_gt_flow(self, depth, valid, intrinsic, rel_pose):
         h, w = depth.shape

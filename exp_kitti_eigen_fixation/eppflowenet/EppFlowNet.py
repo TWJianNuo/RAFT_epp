@@ -236,50 +236,20 @@ class StereoHead(nn.Module):
         self.conv1 = nn.Conv3d(in_channels=48, out_channels=32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv3d(in_channels=32, out_channels=32, kernel_size=3, padding=1)
         self.conv3 = nn.Conv3d(in_channels=32, out_channels=1, kernel_size=1)
-        self.softmax = nn.Softmax(dim=1)
+        self.conv4 = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
         self.args = args
 
-    def soft_argmax(self, x, reld_edges):
-        """ Convert probability volume into point estimate of depth"""
-        x = self.softmax(x)
-        bz, _, h, w = x.shape
-        pred = torch.sum(x * reld_edges.expand([bz, -1, h, w]), dim=1, keepdim=True)
-        return pred
-
-    def forward(self, x, reld_edges):
+    def forward(self, x):
         _, _, _, featureh, featurew = x.shape
         x = self.bnrelu(x)
         x = self.relu(self.conv1(x))
         x = self.relu(self.conv2(x))
-        x = self.conv3(x).squeeze(1)
+        x = self.relu(self.conv3(x).squeeze(1))
+        x = self.conv4(x)
         x = F.interpolate(x, [int(featureh * 4), int(featurew * 4)], mode='bilinear', align_corners=False)
-        pred = self.soft_argmax(x, reld_edges)
+        pred = (self.sigmoid(x) - 0.5) * 2 * self.args.maxlogscale
         return pred
-
-class ScaleHead(nn.Module):
-    def __init__(self, args):
-        super(ScaleHead, self).__init__()
-        self.bnrelu = BnRelu(48)
-        self.relu = nn.ReLU()
-        self.sigmoid = nn.Sigmoid()
-        self.conv1 = nn.Conv2d(in_channels=48, out_channels=32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1)
-        self.args = args
-
-    def forward(self, x, instance, insnum, eppinflate, eppcompress):
-        x = self.bnrelu(x)
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.conv3(x)
-        pred = self.sigmoid(x) * self.args.maxscale + 1e-2
-        pred = F.interpolate(pred, [self.args.inheight, self.args.inwidth], mode='bilinear', align_corners=False)
-
-        pred_compressed = eppcompress(instance, pred.squeeze(1).unsqueeze(-1).unsqueeze(-1), self.args.maxinsnum)
-        pred_compressed = pred_compressed / (insnum + 1e-3)
-        pred_inf = eppinflate(instance, pred_compressed).squeeze(-1).squeeze(-1).unsqueeze(1)
-        pred_inf = torch.clamp(pred_inf, 1e-2)
-        return pred, pred_inf
 
 class EppFlowNet_Decoder(nn.Module):
     def __init__(self):
@@ -304,89 +274,180 @@ class EppFlowNet(nn.Module):
     def __init__(self, args):
         super(EppFlowNet, self).__init__()
         self.args = args
+        self.nedges = self.args.num_deges
         self.encorder = EppFlowNet_Encoder()
         self.decoder = EppFlowNet_Decoder()
         self.stereohead = StereoHead(self.args)
 
         # Sample absolute depth
-        linlogdedge = np.linspace(np.log(self.args.min_depth_pred), np.log(self.args.max_depth_pred), self.args.num_deges)
-        linlogdedge = np.exp(linlogdedge)
-        self.reld_edges = nn.Parameter(torch.from_numpy(linlogdedge).float().view([1, self.args.num_deges, 1, 1]), requires_grad=False)
-        self.nedges = self.args.num_deges
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'depth_bin.pickle'), 'rb') as f:
+            linlogdedge = pickle.load(f)
 
-        xx, yy = np.meshgrid(range(self.args.inwidth), range(self.args.inheight), indexing='xy')
-        pts2d = np.stack([xx, yy, np.ones_like(xx)], axis=2)
-        self.pts2d = nn.Parameter(torch.from_numpy(pts2d).float().view([1, self.args.inheight, self.args.inwidth, 3, 1]), requires_grad=False)
+        assert self.args.num_deges == linlogdedge.shape[0]
+        self.reld_edges = nn.Parameter(torch.from_numpy(linlogdedge).float().view([1, self.args.num_deges, 1, 1]), requires_grad=False)
+        self.pts2ddict = dict()
 
         self.eppinflate = eppcore_inflation.apply
         self.eppcompress = eppcore_compression.apply
 
-    def resample_feature(self, feature1, feature2, instance, intrinsic, t, R, pts2d):
+    def resample_feature(self, feature1, feature2, depthpred, intrinsic, posepred, insmap, orgh, orgw):
         bz, featurc, featureh, featurew = feature1.shape
-        sample_pts = self.get_samplecoords(instance, intrinsic, t, R, pts2d, bz, featureh, featurew)
+        dsratio = int(orgh / featureh)
+        sample_pts, projMimg = self.get_samplecoords(depthpred, intrinsic, posepred, insmap, dsratio, orgh, orgw)
 
         feature2_ex = feature2.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1]).contiguous().view([bz * self.nedges, featurc, featureh, featurew])
         sampled_feature2 = F.grid_sample(feature2_ex, sample_pts, mode='bilinear', align_corners=False).view([bz, self.nedges, featurc, featureh, featurew]).permute([0, 2, 1, 3, 4])
         feature_volume = torch.cat([feature1.unsqueeze(2).expand([-1, -1, self.nedges, -1, -1]), sampled_feature2], dim=1)
-        return feature_volume
+        return feature_volume, sample_pts, projMimg
 
-    def get_samplecoords(self, instance, intrinsic, t, R, pts2d, bz, featureh, featurew):
-        h = int(featureh * 4)
-        w = int(featurew * 4)
+    def get_samplecoords(self, depthpred, intrinsic, posepred, insmap, dsratio, orgh, orgw):
+        featureh = int(orgh / dsratio)
+        featurew = int(orgw / dsratio)
+        bz = intrinsic.shape[0]
 
-        reld_edges = self.reld_edges.expand([bz, -1, h, w])
-        if pts2d is None:
-            pts2d = self.pts2d
-        pts2d = pts2d.expand([bz, -1, -1, -1, -1])
+        intrinsicex = intrinsic.unsqueeze(1).expand([-1, self.args.maxinsnum, -1, -1])
+        projM = intrinsicex @ posepred @ torch.inverse(intrinsicex)
+        projMimg = self.eppinflate(insmap, projM)
 
-        intrinsic_ex = intrinsic.view(bz, 1, 3, 3).expand([-1, self.args.maxinsnum, -1, -1])
-        M = intrinsic_ex @ R @ torch.inverse(intrinsic_ex)
-        T = intrinsic_ex @ t
+        reld_edges = self.reld_edges.expand([bz, -1, orgh, orgw])
+        sample_depthmap = torch.exp(torch.log(depthpred.expand([-1, self.nedges, -1, -1])) + reld_edges)
 
-        M_inf = self.eppinflate(instance, M)
-        T_inf = self.eppinflate(instance, T)
+        infkey = "{}_{}_{}".format(bz, orgh, orgw)
+        if infkey not in self.pts2ddict.keys():
+            xx, yy = np.meshgrid(range(orgw), range(orgh), indexing='xy')
+            xx = torch.from_numpy(xx).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(depthpred.device)
+            yy = torch.from_numpy(yy).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(depthpred.device)
+            ones = torch.ones_like(xx)
+            self.pts2ddict[infkey] = (xx, yy, ones)
+        xx, yy, ones = self.pts2ddict[infkey]
 
-        m1, m2, m3 = torch.split(M_inf, 1, dim=3)
-        t1, t2, t3 = torch.split(T_inf, 1, dim=3)
+        xx = xx.expand([-1, self.nedges, -1, -1])
+        yy = yy.expand([-1, self.nedges, -1, -1])
+        ones = ones.expand([-1, self.nedges, -1, -1])
 
-        numx = (m1 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
-        numy = (m2 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
-        denom = (m3 @ pts2d).view(bz, 1, h, w).expand([-1, self.nedges, -1, -1]) * reld_edges
+        pts3d = torch.stack([xx * sample_depthmap, yy * sample_depthmap, sample_depthmap, ones], dim=-1).unsqueeze(-1)
+        pts2dp = projMimg.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1, -1]) @ pts3d
 
-        t1 = t1.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
-        t2 = t2.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
-        t3 = t3.view(bz, 1, h, w).expand([-1, self.nedges, -1, -1])
+        pxx, pyy, pzz, _ = torch.split(pts2dp, 1, dim=4)
 
-        denomf = (denom + t3)
-        sign = denomf.sign()
+        sign = pzz.sign()
         sign[sign == 0] = 1
-        denomf = torch.clamp(torch.abs(denomf), min=1e-20) * sign
+        pzz = torch.clamp(torch.abs(pzz), min=1e-20) * sign
 
-        sample_px = (numx + t1) / denomf / 4
-        sample_px = F.interpolate(sample_px, scale_factor=0.25, mode='nearest')
+        pxx = (pxx / pzz).squeeze(-1).squeeze(-1)
+        pyy = (pyy / pzz).squeeze(-1).squeeze(-1)
+
+        supressval = torch.ones_like(pxx) * (-100)
+
+        inboundmask = ((pzz > 1e-20).squeeze(-1).squeeze(-1) * (pxx >= 0) * (pyy >= 0) * (pxx < orgw) * (pyy < orgh)).float()
+
+        pxx = inboundmask * pxx + supressval * (1 - inboundmask)
+        pyy = inboundmask * pyy + supressval * (1 - inboundmask)
+
+        sample_px = pxx / float(dsratio)
+        sample_px = F.interpolate(sample_px, [featureh, featurew], mode='nearest')
         sample_px = (sample_px / featurew - 0.5) * 2
 
-        sample_py = (numy + t2) / denomf / 4
-        sample_py = F.interpolate(sample_py, scale_factor=0.25, mode='nearest')
+        sample_py = pyy / float(dsratio)
+        sample_py = F.interpolate(sample_py, [featureh, featurew], mode='nearest')
         sample_py = (sample_py / featureh - 0.5) * 2
 
         sample_pts = torch.stack([sample_px, sample_py], dim=-1).view(bz * self.nedges, featureh, featurew, 2)
-        return sample_pts
+        return sample_pts, projMimg
 
-    def forward(self, image1, image2, instance, intrinsic, t, R, pts2d=None):
+    def forward(self, image1, image2, depthpred, intrinsic, posepred, insmap):
         """ Estimate optical flow between pair of frames """
-        image1 = 2 * (image1 / 255.0) - 1.0
-        image2 = 2 * (image2 / 255.0) - 1.0
+        _, _, orgh, orgw = image1.shape
+        image1_normed = 2 * image1 - 1.0
+        image2_normed = 2 * image2 - 1.0
 
-        feature1 = self.encorder(image1)
-        feature2 = self.encorder(image2)
+        feature1 = self.encorder(image1_normed)
+        feature2 = self.encorder(image2_normed)
 
-        feature_volume = self.resample_feature(feature1, feature2, instance, intrinsic, t, R, pts2d)
+        feature_volume, sample_pts, projMimg = self.resample_feature(feature1, feature2, depthpred, intrinsic, posepred, insmap, orgh, orgw)
 
         d_feature1, d_feature2 = self.decoder(feature_volume)
-        depth1 = self.stereohead(d_feature1, self.reld_edges)
-        depth2 = self.stereohead(d_feature2, self.reld_edges)
-        return depth1, depth2
+        residual_depth1 = self.stereohead(d_feature1)
+        residual_depth2 = self.stereohead(d_feature2)
+
+        depth1 = torch.exp(torch.log(depthpred) + residual_depth1)
+        depth2 = torch.exp(torch.log(depthpred) + residual_depth2)
+
+        flowpred1, imgrecon1 = self.depth2rgb(depth1, projMimg, image2)
+        flowpred2, imgrecon2 = self.depth2rgb(depth2, projMimg, image2)
+
+        outputs = dict()
+        outputs[('depth', 1)] = depth1
+        outputs[('depth', 2)] = depth2
+
+        outputs[('flowpred', 1)] = flowpred1
+        outputs[('flowpred', 2)] = flowpred2
+
+        outputs[('reconImg', 1)] = imgrecon1
+        outputs[('reconImg', 2)] = imgrecon2
+
+        bz, _, nedge, featureh, featurew = feature_volume.shape
+
+        outputs['sample_pts'] = sample_pts.view([bz, nedge, featureh, featurew, 2])
+        with torch.no_grad():
+            outputs['org_flow'] = self.depth2flow(depthpred, projMimg)
+        return outputs
+
+    def depth2flow(self, depth, projMimg):
+        bz, _, orgh, orgw = depth.shape
+        infkey = "{}_{}_{}".format(bz, orgh, orgw)
+        xx, yy, ones = self.pts2ddict[infkey]
+
+        pts3d = torch.stack([xx * depth, yy * depth, depth, ones], dim=-1).squeeze(1).unsqueeze(-1)
+        pts2dp = projMimg @ pts3d
+
+        pxx, pyy, pzz, _ = torch.split(pts2dp, 1, dim=3)
+
+        sign = pzz.sign()
+        sign[sign == 0] = 1
+        pzz = torch.clamp(torch.abs(pzz), min=1e-20) * sign
+
+        pxx = (pxx / pzz).squeeze(-1).squeeze(-1)
+        pyy = (pyy / pzz).squeeze(-1).squeeze(-1)
+
+        flowpredx = pxx - xx.squeeze(1)
+        flowpredy = pyy - yy.squeeze(1)
+        flowpred = torch.stack([flowpredx, flowpredy], dim=1)
+        return flowpred
+
+    def depth2rgb(self, depth, projMimg, img2):
+        bz, _, orgh, orgw = depth.shape
+        infkey = "{}_{}_{}".format(bz, orgh, orgw)
+        xx, yy, ones = self.pts2ddict[infkey]
+
+        pts3d = torch.stack([xx * depth, yy * depth, depth, ones], dim=-1).squeeze(1).unsqueeze(-1)
+        pts2dp = projMimg @ pts3d
+
+        pxx, pyy, pzz, _ = torch.split(pts2dp, 1, dim=3)
+
+        sign = pzz.sign()
+        sign[sign == 0] = 1
+        pzz = torch.clamp(torch.abs(pzz), min=1e-20) * sign
+
+        pxx = (pxx / pzz).squeeze(-1).squeeze(-1)
+        pyy = (pyy / pzz).squeeze(-1).squeeze(-1)
+        pzz = pzz.squeeze(-1).squeeze(-1)
+
+        flowpredx = pxx - xx.squeeze(1)
+        flowpredy = pyy - yy.squeeze(1)
+        flowpred = torch.stack([flowpredx, flowpredy], dim=1)
+
+        supressval = torch.ones_like(pxx) * (-100)
+        inboundmask = (pzz > 1e-20).float()
+
+        pxx = inboundmask * pxx + supressval * (1 - inboundmask)
+        pyy = inboundmask * pyy + supressval * (1 - inboundmask)
+
+        pxx = (pxx / orgw - 0.5) * 2
+        pyy = (pyy / orgh - 0.5) * 2
+        samplepts = torch.stack([pxx, pyy], dim=-1)
+        img1_recon = F.grid_sample(img2, samplepts, mode='bilinear', align_corners=False)
+        return flowpred, img1_recon
 
     def validate_sample(self, image1, image2, depthmap, flowmap, instance, intrinsic, t, R):
         bz, _, h, w = image1.shape
