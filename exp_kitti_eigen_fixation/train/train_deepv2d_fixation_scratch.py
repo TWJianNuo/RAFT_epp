@@ -457,7 +457,6 @@ def train(gpu, ngpus_per_node, args):
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
 
-
                 if args.gpu == 0:
                     results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=False)
                 else:
