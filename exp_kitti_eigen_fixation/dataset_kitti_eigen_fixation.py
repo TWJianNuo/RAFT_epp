@@ -144,10 +144,13 @@ def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
     return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
 
 class KITTI_eigen(data.Dataset):
-    def __init__(self, entries, inheight, inwidth, maxinsnum, root='datasets/KITTI', depth_root=None, depthvls_root=None, ins_root=None, prediction_root=None, istrain=True, muteaug=False):
+    def __init__(self, entries, inheight, inwidth, maxinsnum, root='datasets/KITTI', depth_root=None, depthvls_root=None,
+                 ins_root=None, prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False):
         super(KITTI_eigen, self).__init__()
         self.istrain = istrain
+        self.isgarg = isgarg
         self.muteaug = muteaug
+        self.banremovedup = banremovedup
         self.root = root
         self.depth_root = depth_root
         self.depthvls_root = depthvls_root
@@ -225,7 +228,10 @@ class KITTI_eigen(data.Dataset):
             seq, index, _ = entry.split(' ')
             dupentry.append("{} {}".format(seq, index.zfill(10)))
 
-        removed = list(set(dupentry))
+        if self.banremovedup:
+            removed = dupentry
+        else:
+            removed = list(set(dupentry))
         removed.sort()
         return removed
 
@@ -323,7 +329,7 @@ class KITTI_eigen(data.Dataset):
             left = int((w - crpw) / 2)
         top = int(h - crph)
 
-        if not self.istrain:
+        if not self.istrain and self.isgarg:
             crop = np.array([0.40810811 * h, 0.99189189 * h, 0.03594771 * w, 0.96405229 * w]).astype(np.int32)
             crop_mask = np.zeros([h, w])
             crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1

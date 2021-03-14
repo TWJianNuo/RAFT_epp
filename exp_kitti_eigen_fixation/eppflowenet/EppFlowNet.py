@@ -380,6 +380,9 @@ class EppFlowNet(nn.Module):
         outputs[('depth', 1)] = depth1
         outputs[('depth', 2)] = depth2
 
+        outputs[('residualdepth', 1)] = residual_depth1
+        outputs[('residualdepth', 2)] = residual_depth2
+
         outputs[('flowpred', 1)] = flowpred1
         outputs[('flowpred', 2)] = flowpred2
 
@@ -391,6 +394,16 @@ class EppFlowNet(nn.Module):
         outputs['sample_pts'] = sample_pts.view([bz, nedge, featureh, featurew, 2])
         with torch.no_grad():
             outputs['org_flow'] = self.depth2flow(depthpred, projMimg)
+
+        objscale = torch.log(torch.sqrt(torch.sum(posepred[:, :, 0:3, 3] ** 2, dim=2, keepdim=True)) + 1e-10).unsqueeze(-1)
+        outputs.update(self.depth2rldepth(depthpred, objscale, insmap, outputs))
+        return outputs
+
+    def depth2rldepth(self, depthpred, objscale, insmap, outputs):
+        objscale_inf = self.eppinflate(insmap, objscale).squeeze(-1).squeeze(-1).unsqueeze(1)
+        for k in range(1, 3, 1):
+            outputs[('org_relativedepth', k)] = torch.log(depthpred + 1e-10) - objscale_inf
+            outputs[('relativedepth', k)] = outputs[('org_relativedepth', k)] + outputs[('residualdepth', k)]
         return outputs
 
     def depth2flow(self, depth, projMimg):
