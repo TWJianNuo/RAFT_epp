@@ -281,10 +281,9 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         selfpose_gt = data_blob['rel_pose'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
 
-        fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
         reldepth_gt = torch.log(depthgt + 1e-10) - torch.log(torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1, keepdim=True))).unsqueeze(-1).unsqueeze(-1).expand([-1, -1, args.evalheight, args.evalwidth])
 
-        outputs = model(image1, image2, depthpred, intrinsic, fixed_posepred, insmap)
+        outputs = model(image1, image2, depthpred, intrinsic, posepred, insmap)
         if isdeepv2dpred:
             predreld = outputs[('relativedepth', 2)]
         else:
@@ -512,6 +511,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_layers', type=int, default=50)
     parser.add_argument('--num_deges', type=int, default=32)
     parser.add_argument('--maxlogscale', type=float, default=1.5)
+    parser.add_argument('--scratch', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
