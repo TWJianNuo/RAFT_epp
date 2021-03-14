@@ -510,6 +510,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_layers', type=int, default=50)
     parser.add_argument('--num_deges', type=int, default=32)
     parser.add_argument('--maxlogscale', type=float, default=1.5)
+    parser.add_argument('--highbias', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
