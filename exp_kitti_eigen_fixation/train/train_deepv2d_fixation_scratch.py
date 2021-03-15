@@ -22,7 +22,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet import EppFlowNet
+from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scratch import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -100,8 +100,7 @@ def fetch_optimizer(args, model):
     """ Create the optimizer and learning rate scheduler """
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
 
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps + 100,
-                                              pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps + 100, pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
 
     return optimizer, scheduler
 
@@ -114,25 +113,22 @@ class Logger:
         if self.writer is None:
             self.writer = SummaryWriter(self.logpath)
 
-    def write_vls(self, data_blob, outputs, flowselector, reprojselector, step):
+    def write_vls(self, data_blob, outputs, flowselector, step):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
         figmask_flow = tensor2disp(flowselector, vmax=1, viewind=0)
-        figmask_reprojection = tensor2disp(reprojselector, vmax=1, viewind=0)
         insvls = vls_ins(img1, insmap)
 
         depthpredvls = tensor2disp(1 / outputs[('depth', 2)], vmax=0.15, viewind=0)
-        depthgtvls = tensor2disp(1 / data_blob['depthmap'], vmax=0.15, viewind=0)
         flowvls = flow_to_image(outputs[('flowpred', 2)][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=10)
         imgrecon = tensor2rgb(outputs[('reconImg', 2)], viewind=0)
 
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid1 = np.concatenate([np.array(figmask_flow), np.array(figmask_reprojection)], axis=1)
-        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(depthgtvls)], axis=1)
+        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(figmask_flow)], axis=1)
         img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(flowvls)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid1), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
+        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
         X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowmap'], data_blob['insmap'], outputs)
@@ -151,11 +147,6 @@ class Logger:
         flowy = outputs[('flowpred', 2)][0, 1].detach().cpu().numpy()
         flowxf = flowx[selector]
         flowyf = flowy[selector]
-
-        floworgx = outputs['org_flow'][0, 0].detach().cpu().numpy()
-        floworgy = outputs['org_flow'][0, 1].detach().cpu().numpy()
-        floworgxf = floworgx[selector]
-        floworgyf = floworgy[selector]
 
         xxf = xx[selector]
         yyf = yy[selector]
@@ -207,22 +198,15 @@ class Logger:
         plt.title("Input")
 
         fig.add_subplot(2, 2, 2)
-        plt.scatter(xxf + floworgxf, yyf + floworgyf, 3, rndcolor)
-        plt.imshow(img2)
-        plt.title("Original Prediction")
-
-        fig.add_subplot(2, 2, 3)
         plt.scatter(xxf + flowxf, yyf + flowyf, 3, rndcolor)
         plt.imshow(img2)
         plt.title("Fixed Prediction")
 
-        fig.add_subplot(2, 2, 4)
+        fig.add_subplot(2, 2, 3)
         if slvlsxx_fg is not None and slvlsyy_fg is not None:
             plt.scatter(slvlsxx_fg, slvlsyy_fg, 3, 'b')
-            plt.scatter(slvlsxx_fg[16], slvlsyy_fg[16], 3, 'g')
         if slvlsxx_fg is not None and slvlsyy_fg is not None:
             plt.scatter(slvlsxx_bg, slvlsyy_bg, 3, 'b')
-            plt.scatter(slvlsxx_bg[16], slvlsyy_bg[16], 3, 'g')
             plt.scatter(gtposx, gtposy, 3, 'r')
         plt.imshow(img2)
         plt.title("Sampling Arae")
@@ -263,50 +247,85 @@ class Logger:
     def close(self):
         self.writer.close()
 
+def compute_errors(gt, pred):
+    thresh = np.maximum((gt / pred), (pred / gt))
+
+    d1 = (thresh < 1.25).mean()
+    d2 = (thresh < 1.25 ** 2).mean()
+    d3 = (thresh < 1.25 ** 3).mean()
+
+    rms = (gt - pred) ** 2
+    rms = np.sqrt(rms.mean())
+
+    log_rms = (np.log(gt) - np.log(pred)) ** 2
+    log_rms = np.sqrt(log_rms.mean())
+
+    abs_rel = np.mean(np.abs(gt - pred) / gt)
+    sq_rel = np.mean(((gt - pred) ** 2) / gt)
+
+    err = np.log(pred) - np.log(gt)
+    silog = np.sqrt(np.mean(err ** 2) - np.mean(err) ** 2) * 100
+
+    err = np.abs(np.log10(pred) - np.log10(gt))
+    log10 = np.mean(err)
+
+    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
+
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv2dpred=False):
+def validate_kitti(model, args, eval_loader, logger, group, total_steps):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_reld = torch.zeros(2).cuda(device=gpu)
+    eval_measures_depth = torch.zeros(10).cuda(device=gpu)
 
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
         intrinsic = data_blob['intrinsic'].cuda(gpu)
         insmap = data_blob['insmap'].cuda(gpu)
-        depthpred = data_blob['depthpred'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
-        selfpose_gt = data_blob['rel_pose'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
 
-        reldepth_gt = torch.log(depthgt + 1e-10) - torch.log(torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1, keepdim=True))).unsqueeze(-1).unsqueeze(-1).expand([-1, -1, args.evalheight, args.evalwidth])
+        outputs = model(image1, image2, intrinsic, posepred, insmap)
 
-        outputs = model(image1, image2, depthpred, intrinsic, posepred, insmap)
-        if isdeepv2dpred:
-            predreld = outputs[('relativedepth', 2)]
-        else:
-            predreld = outputs[('org_relativedepth', 2)]
-        selector = ((depthgt > 0) * (insmap == 0)).float()
-        depthloss = torch.sum(torch.abs(predreld - reldepth_gt) * selector) / (torch.sum(selector) + 1)
+        predread = outputs[('depth', 2)]
+        selector = ((depthgt > 0) * (predread > 0)).float()
+        depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
+        pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
-        eval_reld[0] += depthloss
-        eval_reld[1] += 1
+        eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
 
-        if not(logger is None) and np.mod(val_id, 20) == 0 and isdeepv2dpred:
+        eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
+        eval_measures_depth[9] += args.batch_size
+
+        if not(logger is None) and np.mod(val_id, 20) == 0:
             seq, frmidx = data_blob['tag'][0].split(' ')
             tag = "{}_{}".format(seq.split('/')[-1], frmidx)
             logger.write_vls_eval(data_blob, outputs, tag, total_steps)
 
     if args.distributed:
-        dist.all_reduce(tensor=eval_reld, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
 
     if args.gpu == 0:
-        eval_reld[0] = eval_reld[0] / eval_reld[1]
+        eval_measures_depth[0:9] = eval_measures_depth[0:9] / eval_measures_depth[9]
+        eval_measures_depth = eval_measures_depth.cpu().numpy()
+        print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
+        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3'))
+        for i in range(8):
+            print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
+        print('{:7.3f}'.format(eval_measures_depth[8]))
 
-        print("in {} eval samples: Absolute Relative Depth Loss: {:7.3f}".format(eval_reld[1].item(), eval_reld[0].item()))
-        return {'reld': float(eval_reld[0].item())}
+        return {'silog': float(eval_measures_depth[0]),
+                'abs_rel': float(eval_measures_depth[1]),
+                'log10': float(eval_measures_depth[2]),
+                'rms': float(eval_measures_depth[3]),
+                'sq_rel': float(eval_measures_depth[4]),
+                'log_rms': float(eval_measures_depth[5]),
+                'd1': float(eval_measures_depth[6]),
+                'd2': float(eval_measures_depth[7]),
+                'd3': float(eval_measures_depth[8])
+                }
     else:
         return None
 
@@ -327,14 +346,16 @@ def get_reprojection_loss(img1, insmap, outputs, ssim):
     reprojloss = reprojloss / 2
     return reprojloss, selector
 
-def get_rdepth_loss(reldepth_gt, depthgt, outputs, insmap):
-    selector = ((depthgt > 0) * (insmap == 0)).float()
-
+def get_depth_loss(depthgt, outputs):
+    _, _, h, w = depthgt.shape
+    selector = (depthgt > 0)
     depthloss = 0
     for k in range(1, 3, 1):
-        depthloss += torch.sum(torch.abs(outputs[('relativedepth', k)] - reldepth_gt) * selector) / (torch.sum(selector) + 1)
+        tmpselector = (selector * (outputs[('depth', k)] > 0)).float()
+        depthloss += torch.sum(torch.abs(outputs[('depth', k)] - depthgt) * selector) / (torch.sum(selector) + 1)
 
-    return depthloss / 2, selector
+    depthloss = depthloss / 2
+    return depthloss, tmpselector
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -354,8 +375,6 @@ def train(gpu, ngpus_per_node, args):
         model = torch.nn.DataParallel(model)
         model.cuda()
 
-    ssim = SSIM()
-
     logroot = os.path.join(args.logroot, args.name)
     print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
 
@@ -371,7 +390,7 @@ def train(gpu, ngpus_per_node, args):
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
                                 depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root,
-                                istrain=True, muteaug=False, banremovedup=False)
+                                istrain=True, muteaug=False, banremovedup=False, isgarg=True)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
@@ -399,7 +418,7 @@ def train(gpu, ngpus_per_node, args):
 
     VAL_FREQ = 5000
     epoch = 0
-    minreld = 100
+    maxa1 = 0
 
     st = time.time()
     should_keep_training = True
@@ -413,22 +432,15 @@ def train(gpu, ngpus_per_node, args):
             intrinsic = data_blob['intrinsic'].cuda(gpu)
             insmap = data_blob['insmap'].cuda(gpu)
             depthgt = data_blob['depthmap'].cuda(gpu)
-            depthpred = data_blob['depthpred'].cuda(gpu)
             posepred = data_blob['posepred'].cuda(gpu)
-            selfpose_gt = data_blob['rel_pose'].cuda(gpu)
 
-            reldepth_gt = torch.log(depthgt + 1e-10) - torch.log(torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1, keepdim=True))).unsqueeze(-1).unsqueeze(-1).expand([-1, -1, args.inheight, args.inwidth])
-            fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
-
-            outputs = model(image1, image2, depthpred, intrinsic, fixed_posepred, insmap)
-            depthloss, depthselector = get_rdepth_loss(reldepth_gt=reldepth_gt, depthgt=depthgt, outputs=outputs, insmap=insmap)
-            ssimloss, reprojselector = get_reprojection_loss(image1, insmap, outputs, ssim)
+            outputs = model(image1, image2, intrinsic, posepred, insmap)
+            depthloss, depthselector = get_depth_loss(depthgt=depthgt, outputs=outputs)
 
             metrics = dict()
             metrics['depthloss'] = depthloss.item()
-            metrics['ssimloss'] = ssimloss.item()
 
-            loss = depthloss + ssimloss
+            loss = depthloss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
@@ -440,30 +452,22 @@ def train(gpu, ngpus_per_node, args):
                 if total_steps % SUM_FREQ == 0:
                     dr = time.time() - st
                     resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, depthloss: %f, ssimloss: %f" % (total_steps, resths, depthloss.item(), ssimloss.item()))
-                    logger.write_vls(data_blob, outputs, depthselector, reprojselector, total_steps)
+                    print("Step: %d, rest hour: %f, depthloss: %f" % (total_steps, resths, depthloss.item()))
+                    logger.write_vls(data_blob, outputs, depthselector, total_steps)
 
             if total_steps % VAL_FREQ == 1:
                 if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=True)
+                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps)
                 else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2dpred=True)
+                    results = validate_kitti(model.module, args, eval_loader, None, group, None)
 
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
-                    if minreld > results['reld']:
-                        minreld = results['reld']
-                        PATH = os.path.join(logroot, 'minreld.pth')
+                    if maxa1 < results['d1']:
+                        maxa1 = results['d1']
+                        PATH = os.path.join(logroot, 'maxa1.pth')
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
-
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=False)
-                else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2dpred=False)
-
-                if args.gpu == 0:
-                    logger_evaluation_org.write_dict(results, total_steps)
 
                 model.train()
 
@@ -509,8 +513,6 @@ if __name__ == '__main__':
     parser.add_argument('--angz_range', type=float, default=0.01)
     parser.add_argument('--num_layers', type=int, default=50)
     parser.add_argument('--num_deges', type=int, default=32)
-    parser.add_argument('--maxlogscale', type=float, default=1.5)
-    parser.add_argument('--scratch', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)

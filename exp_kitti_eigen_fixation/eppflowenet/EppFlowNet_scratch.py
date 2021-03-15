@@ -248,7 +248,7 @@ class StereoHead(nn.Module):
         x = self.relu(self.conv3(x).squeeze(1))
         x = self.conv4(x)
         x = F.interpolate(x, [int(featureh * 4), int(featurew * 4)], mode='bilinear', align_corners=False)
-        pred = (self.sigmoid(x) - 0.5) * 2 * self.args.maxlogscale
+        pred = self.sigmoid(x) * (self.args.max_depth_pred - self.args.min_depth_pred) + self.args.min_depth_pred
         return pred
 
 class EppFlowNet_Decoder(nn.Module):
@@ -280,7 +280,7 @@ class EppFlowNet(nn.Module):
         self.stereohead = StereoHead(self.args)
 
         # Sample absolute depth
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'depth_bin.pickle'), 'rb') as f:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'depth_bin_fullrange.pickle'), 'rb') as f:
             linlogdedge = pickle.load(f)
 
         assert self.args.num_deges == linlogdedge.shape[0]
@@ -290,17 +290,17 @@ class EppFlowNet(nn.Module):
         self.eppinflate = eppcore_inflation.apply
         self.eppcompress = eppcore_compression.apply
 
-    def resample_feature(self, feature1, feature2, depthpred, intrinsic, posepred, insmap, orgh, orgw):
+    def resample_feature(self, feature1, feature2, intrinsic, posepred, insmap, orgh, orgw):
         bz, featurc, featureh, featurew = feature1.shape
         dsratio = int(orgh / featureh)
-        sample_pts, projMimg = self.get_samplecoords(depthpred, intrinsic, posepred, insmap, dsratio, orgh, orgw)
+        sample_pts, projMimg = self.get_samplecoords(intrinsic, posepred, insmap, dsratio, orgh, orgw)
 
         feature2_ex = feature2.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1]).contiguous().view([bz * self.nedges, featurc, featureh, featurew])
         sampled_feature2 = F.grid_sample(feature2_ex, sample_pts, mode='bilinear', align_corners=False).view([bz, self.nedges, featurc, featureh, featurew]).permute([0, 2, 1, 3, 4])
         feature_volume = torch.cat([feature1.unsqueeze(2).expand([-1, -1, self.nedges, -1, -1]), sampled_feature2], dim=1)
         return feature_volume, sample_pts, projMimg
 
-    def get_samplecoords(self, depthpred, intrinsic, posepred, insmap, dsratio, orgh, orgw):
+    def get_samplecoords(self, intrinsic, posepred, insmap, dsratio, orgh, orgw):
         featureh = int(orgh / dsratio)
         featurew = int(orgw / dsratio)
         bz = intrinsic.shape[0]
@@ -310,22 +310,18 @@ class EppFlowNet(nn.Module):
         projMimg = self.eppinflate(insmap, projM)
 
         reld_edges = self.reld_edges.expand([bz, -1, orgh, orgw])
-        sample_depthmap = torch.exp(torch.log(depthpred.expand([-1, self.nedges, -1, -1])) + reld_edges)
 
         infkey = "{}_{}_{}".format(bz, orgh, orgw)
         if infkey not in self.pts2ddict.keys():
             xx, yy = np.meshgrid(range(orgw), range(orgh), indexing='xy')
-            xx = torch.from_numpy(xx).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(depthpred.device)
-            yy = torch.from_numpy(yy).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(depthpred.device)
+            xx = torch.from_numpy(xx).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(reld_edges.device)
+            yy = torch.from_numpy(yy).float().unsqueeze(0).unsqueeze(0).expand([bz, -1, -1, -1]).cuda(reld_edges.device)
             ones = torch.ones_like(xx)
-            self.pts2ddict[infkey] = (xx, yy, ones)
-        xx, yy, ones = self.pts2ddict[infkey]
 
-        xx = xx.expand([-1, self.nedges, -1, -1])
-        yy = yy.expand([-1, self.nedges, -1, -1])
-        ones = ones.expand([-1, self.nedges, -1, -1])
+            pts3d = torch.stack([xx.expand([-1, self.nedges, -1, -1]) * reld_edges, yy.expand([-1, self.nedges, -1, -1]) * reld_edges, reld_edges, ones.expand([-1, self.nedges, -1, -1])], dim=-1).unsqueeze(-1)
+            self.pts2ddict[infkey] = (xx, yy, ones, pts3d)
 
-        pts3d = torch.stack([xx * sample_depthmap, yy * sample_depthmap, sample_depthmap, ones], dim=-1).unsqueeze(-1)
+        _, _, _, pts3d = self.pts2ddict[infkey]
         pts2dp = projMimg.unsqueeze(1).expand([-1, self.nedges, -1, -1, -1, -1]) @ pts3d
 
         pxx, pyy, pzz, _ = torch.split(pts2dp, 1, dim=4)
@@ -355,7 +351,7 @@ class EppFlowNet(nn.Module):
         sample_pts = torch.stack([sample_px, sample_py], dim=-1).view(bz * self.nedges, featureh, featurew, 2)
         return sample_pts, projMimg
 
-    def forward(self, image1, image2, depthpred, intrinsic, posepred, insmap):
+    def forward(self, image1, image2, intrinsic, posepred, insmap):
         """ Estimate optical flow between pair of frames """
         _, _, orgh, orgw = image1.shape
         image1_normed = 2 * image1 - 1.0
@@ -364,14 +360,11 @@ class EppFlowNet(nn.Module):
         feature1 = self.encorder(image1_normed)
         feature2 = self.encorder(image2_normed)
 
-        feature_volume, sample_pts, projMimg = self.resample_feature(feature1, feature2, depthpred, intrinsic, posepred, insmap, orgh, orgw)
+        feature_volume, sample_pts, projMimg = self.resample_feature(feature1, feature2, intrinsic, posepred, insmap, orgh, orgw)
 
         d_feature1, d_feature2 = self.decoder(feature_volume)
-        residual_depth1 = self.stereohead(d_feature1)
-        residual_depth2 = self.stereohead(d_feature2)
-
-        depth1 = torch.exp(torch.log(depthpred) + residual_depth1)
-        depth2 = torch.exp(torch.log(depthpred) + residual_depth2)
+        depth1 = self.stereohead(d_feature1)
+        depth2 = self.stereohead(d_feature2)
 
         flowpred1, imgrecon1 = self.depth2rgb(depth1, projMimg, image2)
         flowpred2, imgrecon2 = self.depth2rgb(depth2, projMimg, image2)
@@ -379,9 +372,6 @@ class EppFlowNet(nn.Module):
         outputs = dict()
         outputs[('depth', 1)] = depth1
         outputs[('depth', 2)] = depth2
-
-        outputs[('residualdepth', 1)] = residual_depth1
-        outputs[('residualdepth', 2)] = residual_depth2
 
         outputs[('flowpred', 1)] = flowpred1
         outputs[('flowpred', 2)] = flowpred2
@@ -392,46 +382,12 @@ class EppFlowNet(nn.Module):
         bz, _, nedge, featureh, featurew = feature_volume.shape
 
         outputs['sample_pts'] = sample_pts.view([bz, nedge, featureh, featurew, 2])
-        with torch.no_grad():
-            outputs['org_flow'] = self.depth2flow(depthpred, projMimg)
-
-        objscale = torch.log(torch.sqrt(torch.sum(posepred[:, :, 0:3, 3] ** 2, dim=2, keepdim=True)) + 1e-10).unsqueeze(-1)
-        outputs.update(self.depth2rldepth(depthpred, objscale, insmap, outputs))
         return outputs
-
-    def depth2rldepth(self, depthpred, objscale, insmap, outputs):
-        objscale_inf = self.eppinflate(insmap, objscale).squeeze(-1).squeeze(-1).unsqueeze(1)
-        for k in range(1, 3, 1):
-            outputs[('org_relativedepth', k)] = torch.log(depthpred + 1e-10) - objscale_inf
-            outputs[('relativedepth', k)] = outputs[('org_relativedepth', k)] + outputs[('residualdepth', k)]
-        return outputs
-
-    def depth2flow(self, depth, projMimg):
-        bz, _, orgh, orgw = depth.shape
-        infkey = "{}_{}_{}".format(bz, orgh, orgw)
-        xx, yy, ones = self.pts2ddict[infkey]
-
-        pts3d = torch.stack([xx * depth, yy * depth, depth, ones], dim=-1).squeeze(1).unsqueeze(-1)
-        pts2dp = projMimg @ pts3d
-
-        pxx, pyy, pzz, _ = torch.split(pts2dp, 1, dim=3)
-
-        sign = pzz.sign()
-        sign[sign == 0] = 1
-        pzz = torch.clamp(torch.abs(pzz), min=1e-20) * sign
-
-        pxx = (pxx / pzz).squeeze(-1).squeeze(-1)
-        pyy = (pyy / pzz).squeeze(-1).squeeze(-1)
-
-        flowpredx = pxx - xx.squeeze(1)
-        flowpredy = pyy - yy.squeeze(1)
-        flowpred = torch.stack([flowpredx, flowpredy], dim=1)
-        return flowpred
 
     def depth2rgb(self, depth, projMimg, img2):
         bz, _, orgh, orgw = depth.shape
         infkey = "{}_{}_{}".format(bz, orgh, orgw)
-        xx, yy, ones = self.pts2ddict[infkey]
+        xx, yy, ones, _ = self.pts2ddict[infkey]
 
         pts3d = torch.stack([xx * depth, yy * depth, depth, ones], dim=-1).squeeze(1).unsqueeze(-1)
         pts2dp = projMimg @ pts3d
