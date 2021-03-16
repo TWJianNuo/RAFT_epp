@@ -22,7 +22,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet import EppFlowNet
+from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_car import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -113,13 +113,14 @@ class Logger:
         if self.writer is None:
             self.writer = SummaryWriter(self.logpath)
 
-    def write_vls(self, data_blob, outputs, flowselector, step):
+    def write_vls(self, data_blob, outputs, reprojselector, scaleloss_selector, flowselector, step):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
         figmask_flow = tensor2disp(flowselector, vmax=1, viewind=0)
-        figmask_reprojection = tensor2disp(outputs['posescale_selector'], vmax=1, viewind=0)
+        figmask_reprojection = tensor2disp(scaleloss_selector, vmax=1, viewind=0)
+        figmask_reprojselector = tensor2disp(reprojselector, vmax=1, viewind=0)
         insvls = vls_ins(img1, insmap)
 
         depthpredvls = tensor2disp(1 / outputs[('depth', 2)], vmax=0.15, viewind=0)
@@ -130,7 +131,7 @@ class Logger:
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
         img_val_mid1 = np.concatenate([np.array(figmask_flow), np.array(figmask_reprojection)], axis=1)
         img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(depthgtvls)], axis=1)
-        img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(flowvls)], axis=1)
+        img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(figmask_reprojselector)], axis=1)
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid1), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
@@ -275,32 +276,32 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         image2 = data_blob['img2'].cuda(gpu) / 255.0
         intrinsic = data_blob['intrinsic'].cuda(gpu)
         insmap = data_blob['insmap'].cuda(gpu)
-        depthpred = data_blob['depthpred'].cuda(gpu)
-        posepred = data_blob['posepred'].cuda(gpu)
-        selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+        mD_pred = data_blob['depthpred'].cuda(gpu)
+        aposes_pred = data_blob['posepred'].cuda(gpu)
+        sposes_gt = data_blob['rel_pose'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
 
-        reldepth_gt = torch.log(depthgt + 1e-10) - torch.log(torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1, keepdim=True))).unsqueeze(-1).unsqueeze(-1).expand([-1, -1, args.evalheight, args.evalwidth])
+        # Relative Logged Depth is defined as log(depth) - log(self_scale)
+        sposes_gt_scale = torch.log(torch.sqrt(torch.sum(sposes_gt[:, 0:3, 3] ** 2, dim=1)))
+        aposes_pred_scale = torch.log(torch.sqrt(torch.sum(aposes_pred[:, 0, 0:3, 3] ** 2, dim=1)))
 
-        scale_gt = torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1))
-        scale_ig = torch.sqrt(torch.sum(posepred[:, 0, 0:3, 3] ** 2, dim=1))
+        rl_depthgt = torch.log(depthgt + 1e-10) - sposes_gt_scale.view([args.batch_size, 1, 1, 1]).expand([-1, -1, args.evalheight, args.evalwidth])
 
-        outputs = model(image1, image2, depthpred, intrinsic, posepred, insmap)
+        outputs = model(image1, image2, mD_pred, intrinsic, aposes_pred, insmap)
 
-        posescale_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0)).float()
-        outputs['posescale_selector'] = posescale_selector
+        scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0) * (mD_pred > 0)).float()
 
         if isdeepv2dpred:
             predreld = outputs[('relativedepth', 2)]
-            resd_pred = -torch.sum(outputs[('residualdepth', 2)] * posescale_selector, dim=[1, 2, 3]) / (torch.sum(posescale_selector, dim=[1, 2, 3]) + 1)
+            resd_pred = -torch.sum(outputs[('residualdepth', 2)] * scaleloss_selector, dim=[1, 2, 3]) / (torch.sum(scaleloss_selector, dim=[1, 2, 3]) + 1)
         else:
             predreld = outputs[('org_relativedepth', 2)]
             resd_pred = 0
 
-        resscaleloss = torch.abs(scale_ig + resd_pred - scale_gt).mean()
+        resscaleloss = torch.abs(aposes_pred_scale + resd_pred - sposes_gt_scale).sum()
 
-        selector = ((depthgt > 0) * (insmap == 0)).float()
-        depthloss = (torch.sum(torch.abs(predreld - reldepth_gt) * selector, dim=[1,2,3]) / (torch.sum(selector, dim=[1,2,3]) + 1)).sum()
+        selector = ((depthgt > 0) * (insmap == 0) * (mD_pred > 0)).float()
+        depthloss = (torch.sum(torch.abs(predreld - rl_depthgt) * selector, dim=[1, 2, 3]) / (torch.sum(selector, dim=[1, 2, 3]) + 1)).sum()
 
         eval_reld[0] += depthloss
         eval_reld[1] += args.batch_size
@@ -332,9 +333,9 @@ def read_splits():
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     return train_entries, evaluation_entries
 
-def get_reprojection_loss(img1, insmap, outputs, ssim):
+def get_reprojection_loss(img1, outputs, ssim):
     reprojloss = 0
-    selector = ((outputs[('reconImg', 2)].sum(dim=1, keepdim=True) != 0) * (insmap > 0)).float()
+    selector = (outputs[('reconImg', 2)].sum(dim=1, keepdim=True) != 0).float()
     for k in range(1, 3, 1):
         ssimloss = ssim(outputs[('reconImg', k)], img1).mean(dim=1, keepdim=True)
         l1_loss = torch.abs(outputs[('reconImg', k)] - img1).mean(dim=1, keepdim=True)
@@ -343,14 +344,23 @@ def get_reprojection_loss(img1, insmap, outputs, ssim):
     reprojloss = reprojloss / 2
     return reprojloss, selector
 
-def get_rdepth_loss(reldepth_gt, depthgt, outputs, insmap):
-    selector = ((depthgt > 0) * (insmap == 0)).float()
+def get_rdepth_loss(reldepth_gt, depthgt, mD_pred, outputs, insmap):
+    selector = ((depthgt > 0) * (insmap == 0) * (mD_pred > 0)).float()
 
     depthloss = 0
     for k in range(1, 3, 1):
         depthloss += torch.sum(torch.abs(outputs[('relativedepth', k)] - reldepth_gt) * selector) / (torch.sum(selector) + 1)
 
     return depthloss / 2, selector
+
+def get_scale_loss(insmap, outputs, aposes_pred_scale, sposes_gt_scale):
+    scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0)).float()
+    scaleloss = 0
+    for k in range(1, 3, 1):
+        resld_pred_mean = -torch.sum(outputs[('residualdepth', k)] * scaleloss_selector, dim=[1, 2, 3]) / (torch.sum(scaleloss_selector, dim=[1, 2, 3]) + 1)
+        scaleloss += torch.abs(aposes_pred_scale + resld_pred_mean - sposes_gt_scale).mean()
+    scaleloss = scaleloss / 2
+    return scaleloss, scaleloss_selector
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -415,7 +425,7 @@ def train(gpu, ngpus_per_node, args):
 
     VAL_FREQ = 5000
     epoch = 0
-    minreld = 100
+    minscale = 100
 
     st = time.time()
     should_keep_training = True
@@ -429,34 +439,29 @@ def train(gpu, ngpus_per_node, args):
             intrinsic = data_blob['intrinsic'].cuda(gpu)
             insmap = data_blob['insmap'].cuda(gpu)
             depthgt = data_blob['depthmap'].cuda(gpu)
-            depthpred = data_blob['depthpred'].cuda(gpu)
-            posepred = data_blob['posepred'].cuda(gpu)
-            selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+            mD_pred = data_blob['depthpred'].cuda(gpu)
+            aposes_pred = data_blob['posepred'].cuda(gpu)
+            sposes_gt = data_blob['rel_pose'].cuda(gpu)
 
-            reldepth_gt = torch.log(depthgt + 1e-10) - torch.log(torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1, keepdim=True))).unsqueeze(-1).unsqueeze(-1).expand([-1, -1, args.inheight, args.inwidth])
+            # Relative Logged Depth is defined as log(depth) - log(self_scale)
+            sposes_gt_scale = torch.log(torch.sqrt(torch.sum(sposes_gt[:, 0:3, 3] ** 2, dim=1)))
+            aposes_pred_scale = torch.log(torch.sqrt(torch.sum(aposes_pred[:, 0, 0:3, 3] ** 2, dim=1)))
 
-            scale_gt = torch.sqrt(torch.sum(selfpose_gt[:, 0:3, 3] ** 2, dim=1))
-            scale_ig = torch.sqrt(torch.sum(posepred[:, 0, 0:3, 3] ** 2, dim=1))
+            rl_depthgt = torch.log(depthgt + 1e-10) - sposes_gt_scale.view([args.batch_size, 1, 1, 1]).expand([-1, -1, args.inheight, args.inwidth])
 
-            outputs = model(image1, image2, depthpred, intrinsic, posepred, insmap)
+            outputs = model(image1, image2, mD_pred, intrinsic, aposes_pred, insmap)
 
-            selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0)).float()
-            resscaleloss = 0
-            for k in range(1, 3, 1):
-                resd_pred = -torch.sum(outputs[('residualdepth', k)] * selector, dim=[1, 2, 3]) / (torch.sum(selector, dim=[1, 2, 3]) + 1)
-                resscaleloss += torch.abs(scale_ig + resd_pred - scale_gt).mean()
-            resscaleloss = resscaleloss / 2
-            outputs['posescale_selector'] = selector
+            scaleloss, scaleloss_selector = get_scale_loss(insmap, outputs, aposes_pred_scale, sposes_gt_scale)
 
-            depthloss, depthselector = get_rdepth_loss(reldepth_gt=reldepth_gt, depthgt=depthgt, outputs=outputs, insmap=insmap)
-            ssimloss, reprojselector = get_reprojection_loss(image1, insmap, outputs, ssim)
+            depthloss, depthselector = get_rdepth_loss(reldepth_gt=rl_depthgt, depthgt=depthgt, mD_pred=mD_pred, outputs=outputs, insmap=insmap)
+            ssimloss, reprojselector = get_reprojection_loss(image1, outputs, ssim)
 
             metrics = dict()
             metrics['depthloss'] = depthloss.item()
-            metrics['resscaleloss'] = resscaleloss.item()
+            metrics['scaleloss'] = scaleloss.item()
             metrics['ssimloss'] = ssimloss.item()
 
-            loss = resscaleloss
+            loss = scaleloss + depthloss + ssimloss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
@@ -468,22 +473,22 @@ def train(gpu, ngpus_per_node, args):
                 if total_steps % SUM_FREQ == 0:
                     dr = time.time() - st
                     resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, resscaleloss: %f, depthloss: %f, ssimloss: %f" % (total_steps, resths, resscaleloss.item(), depthloss.item(), ssimloss.item()))
-                    logger.write_vls(data_blob, outputs, depthselector, total_steps)
+                    print("Step: %d, rest hour: %f, resscaleloss: %f, depthloss: %f, ssimloss: %f" % (total_steps, resths, scaleloss.item(), depthloss.item(), ssimloss.item()))
+                    logger.write_vls(data_blob, outputs, reprojselector, scaleloss_selector, depthselector, total_steps)
 
             if total_steps % VAL_FREQ == 1:
-                # if args.gpu == 0:
-                #     results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=True)
-                # else:
-                #     results = validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2dpred=True)
-                #
-                # if args.gpu == 0:
-                #     logger_evaluation.write_dict(results, total_steps)
-                #     if minreld > results['reld']:
-                #         minreld = results['reld']
-                #         PATH = os.path.join(logroot, 'minreld.pth')
-                #         torch.save(model.state_dict(), PATH)
-                #         print("model saved to %s" % PATH)
+                if args.gpu == 0:
+                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=True)
+                else:
+                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2dpred=True)
+
+                if args.gpu == 0:
+                    logger_evaluation.write_dict(results, total_steps)
+                    if minscale > results['relpose']:
+                        minscale = results['relpose']
+                        PATH = os.path.join(logroot, 'minscale.pth')
+                        torch.save(model.state_dict(), PATH)
+                        print("model saved to %s" % PATH)
 
                 if args.gpu == 0:
                     results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isdeepv2dpred=False)
@@ -507,7 +512,7 @@ def train(gpu, ngpus_per_node, args):
         PATH = os.path.join(logroot, 'final.pth')
         torch.save(model.state_dict(), PATH)
 
-    return PATH
+    return
 
 
 if __name__ == '__main__':
