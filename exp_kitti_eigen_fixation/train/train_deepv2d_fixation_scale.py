@@ -288,7 +288,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
 
         outputs = model(image1, image2, mD_pred, intrinsic, aposes_pred, insmap)
 
-        scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0)).float()
+        scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0) * (mD_pred > 0)).float()
 
         if isdeepv2dpred:
             predreld = outputs[('relativedepth', 2)]
@@ -299,7 +299,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
 
         resscaleloss = torch.abs(aposes_pred_scale + resd_pred - sposes_gt_scale).sum()
 
-        selector = ((depthgt > 0) * (insmap == 0)).float()
+        selector = ((depthgt > 0) * (insmap == 0) * (mD_pred > 0)).float()
         depthloss = (torch.sum(torch.abs(predreld - rl_depthgt) * selector, dim=[1, 2, 3]) / (torch.sum(selector, dim=[1, 2, 3]) + 1)).sum()
 
         eval_reld[0] += depthloss
@@ -343,8 +343,8 @@ def get_reprojection_loss(img1, insmap, outputs, ssim):
     reprojloss = reprojloss / 2
     return reprojloss, selector
 
-def get_rdepth_loss(reldepth_gt, depthgt, outputs, insmap):
-    selector = ((depthgt > 0) * (insmap == 0)).float()
+def get_rdepth_loss(reldepth_gt, depthgt, outputs, mD_pred, insmap):
+    selector = ((depthgt > 0) * (insmap == 0) * (mD_pred > 0)).float()
 
     depthloss = 0
     for k in range(1, 3, 1):
@@ -352,8 +352,8 @@ def get_rdepth_loss(reldepth_gt, depthgt, outputs, insmap):
 
     return depthloss / 2, selector
 
-def get_scale_loss(insmap, outputs, aposes_pred_scale, sposes_gt_scale):
-    scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0)).float()
+def get_scale_loss(insmap, outputs, mD_pred, aposes_pred_scale, sposes_gt_scale):
+    scaleloss_selector = ((torch.sum(outputs[('reconImg', 2)], dim=1, keepdim=True) > 0) * (insmap == 0) * (mD_pred > 0)).float()
     scaleloss = 0
     for k in range(1, 3, 1):
         resld_pred_mean = -torch.sum(outputs[('residualdepth', k)] * scaleloss_selector, dim=[1, 2, 3]) / (torch.sum(scaleloss_selector, dim=[1, 2, 3]) + 1)
@@ -378,8 +378,6 @@ def train(gpu, ngpus_per_node, args):
     else:
         model = torch.nn.DataParallel(model)
         model.cuda()
-
-    ssim = SSIM()
 
     logroot = os.path.join(args.logroot, args.name)
     print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
@@ -450,15 +448,13 @@ def train(gpu, ngpus_per_node, args):
 
             outputs = model(image1, image2, mD_pred, intrinsic, aposes_pred, insmap)
 
-            scaleloss, scaleloss_selector = get_scale_loss(insmap, outputs, aposes_pred_scale, sposes_gt_scale)
+            scaleloss, scaleloss_selector = get_scale_loss(insmap, outputs, mD_pred, aposes_pred_scale, sposes_gt_scale)
 
-            depthloss, depthselector = get_rdepth_loss(reldepth_gt=rl_depthgt, depthgt=depthgt, outputs=outputs, insmap=insmap)
-            ssimloss, reprojselector = get_reprojection_loss(image1, insmap, outputs, ssim)
+            depthloss, depthselector = get_rdepth_loss(reldepth_gt=rl_depthgt, depthgt=depthgt, outputs=outputs, mD_pred=mD_pred, insmap=insmap)
 
             metrics = dict()
             metrics['depthloss'] = depthloss.item()
             metrics['scaleloss'] = scaleloss.item()
-            metrics['ssimloss'] = ssimloss.item()
 
             loss = scaleloss + depthloss
             loss.backward()
@@ -472,7 +468,7 @@ def train(gpu, ngpus_per_node, args):
                 if total_steps % SUM_FREQ == 0:
                     dr = time.time() - st
                     resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, resscaleloss: %f, depthloss: %f, ssimloss: %f" % (total_steps, resths, scaleloss.item(), depthloss.item(), ssimloss.item()))
+                    print("Step: %d, rest hour: %f, resscaleloss: %f, depthloss: %f" % (total_steps, resths, scaleloss.item(), depthloss.item()))
                     logger.write_vls(data_blob, outputs, scaleloss_selector, depthselector, total_steps)
 
             if total_steps % VAL_FREQ == 1:
