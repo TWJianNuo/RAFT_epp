@@ -563,6 +563,7 @@ if __name__ == '__main__':
     parser.add_argument('--dist_backend', type=str, help='distributed backend', default='nccl')
 
     args = parser.parse_args()
+    args.dist_url = args.dist_url.rstrip('1235') + str(np.random.randint(2000, 3000, 1).item())
 
     torch.manual_seed(1234)
     np.random.seed(1234)
