@@ -438,10 +438,8 @@ def train(gpu, ngpus_per_node, args):
     if args.gpu == 0:
         logger = Logger(logroot)
         logger_evaluation = Logger(os.path.join(args.logroot, 'evaluation_eigen_background', args.name))
-        logger_evaluation_org = Logger(os.path.join(args.logroot, 'evaluation_eigen_background', "{}_org".format(args.name)))
         logger.create_summarywriter()
         logger_evaluation.create_summarywriter()
-        logger_evaluation_org.create_summarywriter()
 
     VAL_FREQ = 5000
     epoch = 0
