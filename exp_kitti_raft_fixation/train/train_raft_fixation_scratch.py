@@ -477,7 +477,7 @@ def train(gpu, ngpus_per_node, args):
             metrics['depthloss'] = dloss.item()
             metrics['logdepthloss'] = ldloss.item()
 
-            loss = dloss + ldloss
+            loss = dloss + ldloss * 0
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
