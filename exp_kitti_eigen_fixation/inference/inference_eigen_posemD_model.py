@@ -50,8 +50,10 @@ def read_splits(args):
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    return train_entries + evaluation_entries + odom_entries
-
+    if args.only_eval:
+        return evaluation_entries
+    else:
+        return train_entries + evaluation_entries + odom_entries
 class PoseMDNet(nn.Module):
     def __init__(self, args):
         super(PoseMDNet, self).__init__()
@@ -245,6 +247,7 @@ if __name__ == '__main__':
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
+    parser.add_argument('--only_eval', action='store_true')
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1234')

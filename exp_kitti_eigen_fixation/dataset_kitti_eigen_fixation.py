@@ -143,9 +143,30 @@ def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
 
     return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
 
+def readlines(filename):
+    with open(filename, 'r') as f:
+        filenames = f.readlines()
+    return filenames
+
+def read_deepv2d_pose(deepv2dpose_path):
+    # Read Pose from Deepv2d
+    posesstr = readlines(deepv2dpose_path)
+    poses = list()
+    for pstr in posesstr:
+        pose = np.zeros([4, 4]).flatten()
+        for idx, ele in enumerate(pstr.split(' ')):
+            pose[idx] = float(ele)
+            if idx == 15:
+                break
+        pose = np.reshape(pose, [4, 4])
+        poses.append(pose)
+    pose_deepv2d = poses[3] @ np.linalg.inv(poses[0])
+    pose_deepv2d[0:3, 3] = pose_deepv2d[0:3, 3] * 10
+    return pose_deepv2d
+
 class KITTI_eigen(data.Dataset):
     def __init__(self, entries, inheight, inwidth, maxinsnum, root='datasets/KITTI', depth_root=None, depthvls_root=None,
-                 ins_root=None, prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False):
+                 ins_root=None, prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False, deepv2dpred_root=None):
         super(KITTI_eigen, self).__init__()
         self.istrain = istrain
         self.isgarg = isgarg
@@ -155,6 +176,7 @@ class KITTI_eigen(data.Dataset):
         self.depth_root = depth_root
         self.depthvls_root = depthvls_root
         self.prediction_root = prediction_root
+        self.deepv2dpred_root = deepv2dpred_root
         self.ins_root = ins_root
         self.inheight = inheight
         self.inwidth = inwidth
@@ -171,6 +193,8 @@ class KITTI_eigen(data.Dataset):
         self.inspred_list = list()
         self.predDepthpath_list = list()
         self.predPosepath_list = list()
+        self.deepv2dpredpath_list = list()
+        self.deepv2dpredpose_list = list()
 
         self.entries = list()
 
@@ -203,6 +227,15 @@ class KITTI_eigen(data.Dataset):
 
             if not os.path.exists(predDepthpath) or not os.path.exists(predPosepath):
                 continue
+
+            if deepv2dpred_root is not None:
+                deepv2d_path = os.path.join(deepv2dpred_root, seq, 'depthpred', "{}.png".format(str(index).zfill(10)))
+                deepv2dpose_path = os.path.join(deepv2dpred_root, seq, 'posepred', "{}.txt".format(str(index).zfill(10)))
+                if os.path.exists(deepv2d_path):
+                    self.deepv2dpredpath_list.append(deepv2d_path)
+                    self.deepv2dpredpose_list.append(deepv2dpose_path)
+                else:
+                    raise Exception("Deepv2d prediction file %s missing" % inspath)
 
             if not os.path.exists(img2path):
                 self.image_list.append([img1path, img1path])
@@ -264,11 +297,18 @@ class KITTI_eigen(data.Dataset):
         posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
         inspred, posepred = self.pad_clip_ins(insmap=inspred, posepred=posepred)
 
-        img1, img2, flowgt, depth, depthvls, depthpred, inspred, intrinsic = self.aug_crop(img1, img2, flowgt, depth, depthvls, depthpred, inspred, intrinsic)
+        if self.deepv2dpred_root is not None:
+            depthpred_deepv2d = np.array(Image.open(self.deepv2dpredpath_list[index])).astype(np.float32) / 256.0
+            posepred_deepv2d = read_deepv2d_pose(self.deepv2dpredpose_list[index])
+        else:
+            depthpred_deepv2d = None
+            posepred_deepv2d = None
+
+        img1, img2, flowgt, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic = self.aug_crop(img1, img2, flowgt, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic)
         if self.istrain and not self.muteaug:
             img1, img2 = self.colorjitter(img1, img2)
 
-        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, depthmap=depth, depthvls=depthvls, depthpred=depthpred, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, tag=self.entries[index])
+        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, depthmap=depth, depthvls=depthvls, depthpred=depthpred, depthpred_deepv2d=depthpred_deepv2d, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, posepred_deepv2d=posepred_deepv2d, tag=self.entries[index])
         return data_blob
 
     def pad_clip_ins(self, insmap, posepred):
@@ -283,7 +323,7 @@ class KITTI_eigen(data.Dataset):
             posepred_pad[0:currentins] = posepred
         return insmap, posepred_pad
 
-    def wrapup(self, img1, img2, flowmap, depthmap, depthvls, depthpred, intrinsic, insmap, rel_pose, posepred, tag):
+    def wrapup(self, img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, intrinsic, insmap, rel_pose, posepred, posepred_deepv2d, tag):
         img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
         flowmap = torch.from_numpy(flowmap).permute([2, 0, 1]).float()
@@ -308,13 +348,21 @@ class KITTI_eigen(data.Dataset):
         data_blob['posepred'] = posepred
         data_blob['tag'] = tag
 
+        if depthpred_deepv2d is not None:
+            depthpred_deepv2d = torch.from_numpy(depthpred_deepv2d).unsqueeze(0).float()
+            data_blob['depthpred_deepv2d'] = depthpred_deepv2d
+
+        if posepred_deepv2d is not None:
+            posepred_deepv2d = torch.from_numpy(posepred_deepv2d).unsqueeze(0).float()
+            data_blob['posepred_deepv2d'] = posepred_deepv2d
+
         return data_blob
 
     def crop_img(self, img, left, top, crph, crpw):
         img_cropped = img[top:top+crph, left:left+crpw]
         return img_cropped
 
-    def aug_crop(self, img1, img2, flowmap, depthmap, depthvls, depthpred, instancemap, intrinsic):
+    def aug_crop(self, img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic):
         if img1.ndim == 3:
             h, w, _ = img1.shape
         else:
@@ -346,8 +394,10 @@ class KITTI_eigen(data.Dataset):
         depthvls = self.crop_img(depthvls, left=left, top=top, crph=crph, crpw=crpw)
         depthpred = self.crop_img(depthpred, left=left, top=top, crph=crph, crpw=crpw)
         instancemap = self.crop_img(instancemap, left=left, top=top, crph=crph, crpw=crpw)
+        if depthpred_deepv2d is not None:
+            depthpred_deepv2d = self.crop_img(depthpred_deepv2d, left=left, top=top, crph=crph, crpw=crpw)
 
-        return img1, img2, flowmap, depthmap, depthvls, depthpred, instancemap, intrinsic
+        return img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic
 
     def get_gt_flow(self, depth, valid, intrinsic, rel_pose):
         h, w = depth.shape

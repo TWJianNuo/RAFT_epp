@@ -32,8 +32,8 @@ class RAFT(nn.Module):
         self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
         self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
 
-        samplesapce_log = np.linspace(0, args.max_updatescale * 2, args.num_deges - 1)
-        sampled_rld = samplesapce_log - args.max_updatescale
+        samplesapce_log = np.linspace(0, args.sample_range * 2, args.num_deges - 1)
+        sampled_rld = samplesapce_log - args.sample_range
         sampled_rld = np.sort(np.concatenate([np.array([0]), sampled_rld]))
 
         assert sampled_rld.shape[0] == args.num_deges

@@ -304,10 +304,13 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         depthgt = data_blob['depthmap'].cuda(gpu)
         depthpred = data_blob['depthpred'].cuda(gpu)
 
+        selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+        fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
+
         if args.hasinitial:
-            outputs = model(image1, image2, intrinsic, posepred, insmap, initialdepth=depthpred, iters=args.iters)
+            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
         else:
-            outputs = model(image1, image2, intrinsic, posepred, insmap, iters=args.iters)
+            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
 
         depth_predictions = outputs['depth_predictions']
 
@@ -461,10 +464,14 @@ def train(gpu, ngpus_per_node, args):
             posepred = data_blob['posepred'].cuda(gpu)
             logdepthgt = torch.log(depthgt + 1e-10)
 
+            selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+            fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand(
+                [-1, args.maxinsnum, -1, -1]) @ posepred
+
             if args.hasinitial:
-                outputs = model(image1, image2, intrinsic, posepred, insmap, initialdepth=depthpred, iters=args.iters)
+                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
             else:
-                outputs = model(image1, image2, intrinsic, posepred, insmap, iters=args.iters)
+                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
 
             depth_predictions = outputs['depth_predictions']
             logdepth_predictions = outputs['logdepth_predictions']
