@@ -297,6 +297,9 @@ class KITTI_eigen(data.Dataset):
         posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
         inspred, posepred = self.pad_clip_ins(insmap=inspred, posepred=posepred)
 
+        if not hasattr(self, 'deepv2dpred_root'):
+            self.deepv2dpred_root = None
+
         if self.deepv2dpred_root is not None:
             depthpred_deepv2d = np.array(Image.open(self.deepv2dpredpath_list[index])).astype(np.float32) / 256.0
             posepred_deepv2d = read_deepv2d_pose(self.deepv2dpredpose_list[index])
