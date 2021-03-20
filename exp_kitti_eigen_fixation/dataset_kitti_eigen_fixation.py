@@ -291,7 +291,6 @@ class KITTI_eigen(data.Dataset):
         intrinsic = copy.deepcopy(self.intrinsic_list[index])
         rel_pose = copy.deepcopy(self.pose_list[index])
         inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
-        flowgt = self.get_gt_flow(depth=depth, valid=(inspred==0) * (depth>0), intrinsic=intrinsic, rel_pose=rel_pose)
 
         depthpred = np.array(Image.open(self.predDepthpath_list[index])).astype(np.float32) / 256.0
         posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
@@ -307,7 +306,9 @@ class KITTI_eigen(data.Dataset):
             depthpred_deepv2d = None
             posepred_deepv2d = None
 
-        img1, img2, flowgt, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic = self.aug_crop(img1, img2, flowgt, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic)
+        img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic = self.aug_crop(img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic)
+
+        flowgt = self.get_gt_flow(depth=depth, valid=(inspred==0) * (depth>0), intrinsic=intrinsic, rel_pose=rel_pose)
         if self.istrain and not self.muteaug:
             img1, img2 = self.colorjitter(img1, img2)
 
@@ -365,7 +366,7 @@ class KITTI_eigen(data.Dataset):
         img_cropped = img[top:top+crph, left:left+crpw]
         return img_cropped
 
-    def aug_crop(self, img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic):
+    def aug_crop(self, img1, img2, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic):
         if img1.ndim == 3:
             h, w, _ = img1.shape
         else:
@@ -392,7 +393,6 @@ class KITTI_eigen(data.Dataset):
 
         img1 = self.crop_img(img1, left=left, top=top, crph=crph, crpw=crpw)
         img2 = self.crop_img(img2, left=left, top=top, crph=crph, crpw=crpw)
-        flowmap = self.crop_img(flowmap, left=left, top=top, crph=crph, crpw=crpw)
         depthmap = self.crop_img(depthmap, left=left, top=top, crph=crph, crpw=crpw)
         depthvls = self.crop_img(depthvls, left=left, top=top, crph=crph, crpw=crpw)
         depthpred = self.crop_img(depthpred, left=left, top=top, crph=crph, crpw=crpw)
@@ -400,7 +400,7 @@ class KITTI_eigen(data.Dataset):
         if depthpred_deepv2d is not None:
             depthpred_deepv2d = self.crop_img(depthpred_deepv2d, left=left, top=top, crph=crph, crpw=crpw)
 
-        return img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic
+        return img1, img2, depthmap, depthvls, depthpred, depthpred_deepv2d, instancemap, intrinsic
 
     def get_gt_flow(self, depth, valid, intrinsic, rel_pose):
         h, w = depth.shape

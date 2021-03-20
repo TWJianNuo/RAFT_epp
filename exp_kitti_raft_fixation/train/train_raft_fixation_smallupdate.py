@@ -96,13 +96,20 @@ class SSIM(nn.Module):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def fetch_optimizer(args, model):
+def fetch_optimizer(args, model, steps_per_epoch):
     """ Create the optimizer and learning rate scheduler """
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
-
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps + 100, pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
-
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=20, steps_per_epoch=steps_per_epoch, pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
     return optimizer, scheduler
+
+class silog_loss(nn.Module):
+    def __init__(self, variance_focus):
+        super(silog_loss, self).__init__()
+        self.variance_focus = variance_focus
+
+    def forward(self, depth_est, depth_gt, mask):
+        d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
+        return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
 class Logger:
     def __init__(self, logpath):
@@ -304,10 +311,13 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         depthgt = data_blob['depthmap'].cuda(gpu)
         depthpred = data_blob['depthpred'].cuda(gpu)
 
+        selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+        fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
+
         if args.hasinitial:
-            outputs = model(image1, image2, intrinsic, posepred, insmap, initialdepth=depthpred, iters=args.iters)
+            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
         else:
-            outputs = model(image1, image2, intrinsic, posepred, insmap, iters=args.iters)
+            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
 
         depth_predictions = outputs['depth_predictions']
 
@@ -371,7 +381,7 @@ def sequence_logdepth_loss(logdepth_predictions, logdepthgt, valid, gamma=0.8):
 
     return logdepth_loss
 
-def sequence_depth_loss(depth_predictions, depthgt, valid, gamma=0.8):
+def sequence_depth_loss(depth_predictions, depthgt, valid, silog_criterion, gamma=0.8):
     """ Loss function defined over sequence of flow predictions """
 
     n_predictions = len(depth_predictions)
@@ -379,8 +389,8 @@ def sequence_depth_loss(depth_predictions, depthgt, valid, gamma=0.8):
 
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
-        i_loss = ((depth_predictions[i] - depthgt).abs() * valid).sum() / (valid.sum() + 1)
-        depth_loss += i_weight * i_loss
+        loss = silog_criterion.forward(depth_predictions[i], depthgt, valid.to(torch.bool))
+        depth_loss += i_weight * loss
 
     return depth_loss
 
@@ -431,7 +441,7 @@ def train(gpu, ngpus_per_node, args):
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
-    optimizer, scheduler = fetch_optimizer(args, model)
+    optimizer, scheduler = fetch_optimizer(args, model, int(train_dataset.__len__() / 2))
 
     total_steps = 0
 
@@ -461,23 +471,25 @@ def train(gpu, ngpus_per_node, args):
             posepred = data_blob['posepred'].cuda(gpu)
             logdepthgt = torch.log(depthgt + 1e-10)
 
+            silog_criterion = silog_loss(variance_focus=args.variance_focus)
+
+            selfpose_gt = data_blob['rel_pose'].cuda(gpu)
+            fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
+
             if args.hasinitial:
-                outputs = model(image1, image2, intrinsic, posepred, insmap, initialdepth=depthpred, iters=args.iters)
+                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
             else:
-                outputs = model(image1, image2, intrinsic, posepred, insmap, iters=args.iters)
+                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
 
             depth_predictions = outputs['depth_predictions']
-            logdepth_predictions = outputs['logdepth_predictions']
 
             depth_selector = (depthgt > 0).float()
-            ldloss = sequence_logdepth_loss(logdepth_predictions, logdepthgt, depth_selector, gamma=args.gamma)
-            dloss = sequence_depth_loss(depth_predictions, depthgt, depth_selector, gamma=args.gamma)
+            dloss = sequence_depth_loss(depth_predictions, depthgt, depth_selector, gamma=args.gamma, silog_criterion=silog_criterion)
 
             metrics = dict()
             metrics['depthloss'] = dloss.item()
-            metrics['logdepthloss'] = ldloss.item()
 
-            loss = dloss + ldloss * 0
+            loss = dloss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
@@ -489,7 +501,7 @@ def train(gpu, ngpus_per_node, args):
                 if total_steps % SUM_FREQ == 0:
                     dr = time.time() - st
                     resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, logdepthloss: %f, depthloss: %f" % (total_steps, resths, ldloss.item(), dloss.item()))
+                    print("Step: %d, rest hour: %f, depthloss: %f" % (total_steps, resths, dloss.item()))
                     logger.write_vls(data_blob, outputs, depth_selector, total_steps)
 
             if total_steps % VAL_FREQ == 1:
@@ -543,9 +555,9 @@ if __name__ == '__main__':
     parser.add_argument('--min_depth_eval', type=float, default=1e-3)
     parser.add_argument('--max_depth_eval', type=float, default=80)
     parser.add_argument('--max_updatescale', type=float, default=0.5)
-    parser.add_argument('--sample_range', type=float, default=2)
+    parser.add_argument('--sample_range', type=float, default=1.5)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
-    parser.add_argument('--iters', type=int, default=12)
+    parser.add_argument('--iters', type=int, default=6)
     parser.add_argument('--hasinitial', action='store_true')
 
     parser.add_argument('--tscale_range', type=float, default=3)
@@ -569,6 +581,9 @@ if __name__ == '__main__':
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
+    parser.add_argument('--variance_focus', type=float,
+                        help='lambda in paper: [0, 1], higher value more focus on minimizing variance of error',
+                        default=0.85)
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
