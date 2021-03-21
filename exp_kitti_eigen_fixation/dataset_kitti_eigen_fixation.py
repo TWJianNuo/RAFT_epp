@@ -309,10 +309,12 @@ class KITTI_eigen(data.Dataset):
         img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic = self.aug_crop(img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, inspred, intrinsic)
 
         flowgt = self.get_gt_flow(depth=depth, valid=(inspred==0) * (depth>0), intrinsic=intrinsic, rel_pose=rel_pose)
+        flowgt_vls = self.get_gt_flow(depth=depthvls, valid=(inspred==0) * (depthvls>0), intrinsic=intrinsic, rel_pose=rel_pose)
         if self.istrain and not self.muteaug:
             img1, img2 = self.colorjitter(img1, img2)
 
-        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, depthmap=depth, depthvls=depthvls, depthpred=depthpred, depthpred_deepv2d=depthpred_deepv2d, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, posepred_deepv2d=posepred_deepv2d, tag=self.entries[index])
+        data_blob = self.wrapup(img1=img1, img2=img2, flowmap=flowgt, flowgt_vls=flowgt_vls,
+                                depthmap=depth, depthvls=depthvls, depthpred=depthpred, depthpred_deepv2d=depthpred_deepv2d, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, posepred_deepv2d=posepred_deepv2d, tag=self.entries[index])
         return data_blob
 
     def pad_clip_ins(self, insmap, posepred):
@@ -327,10 +329,11 @@ class KITTI_eigen(data.Dataset):
             posepred_pad[0:currentins] = posepred
         return insmap, posepred_pad
 
-    def wrapup(self, img1, img2, flowmap, depthmap, depthvls, depthpred, depthpred_deepv2d, intrinsic, insmap, rel_pose, posepred, posepred_deepv2d, tag):
+    def wrapup(self, img1, img2, flowmap, flowgt_vls, depthmap, depthvls, depthpred, depthpred_deepv2d, intrinsic, insmap, rel_pose, posepred, posepred_deepv2d, tag):
         img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
         flowmap = torch.from_numpy(flowmap).permute([2, 0, 1]).float()
+        flowgt_vls = torch.from_numpy(flowgt_vls).permute([2, 0, 1]).float()
         depthmap = torch.from_numpy(depthmap).unsqueeze(0).float()
         depthvls = torch.from_numpy(depthvls).unsqueeze(0).float()
         depthpred = torch.from_numpy(depthpred).unsqueeze(0).float()
@@ -343,6 +346,7 @@ class KITTI_eigen(data.Dataset):
         data_blob['img1'] = img1
         data_blob['img2'] = img2
         data_blob['flowmap'] = flowmap
+        data_blob['flowgt_vls'] = flowgt_vls
         data_blob['depthmap'] = depthmap
         data_blob['depthvls'] = depthvls
         data_blob['depthpred'] = depthpred
@@ -418,10 +422,11 @@ class KITTI_eigen(data.Dataset):
         pts2d_oview = intrinsic @ pts3d_oview
         pts2d_oview[0, :] = pts2d_oview[0, :] / pts2d_oview[2, :]
         pts2d_oview[1, :] = pts2d_oview[1, :] / pts2d_oview[2, :]
+        selector = pts2d_oview[2, :] > 0
 
         flowgt = np.zeros([h, w, 2])
-        flowgt[yyf.astype(np.int), xxf.astype(np.int), 0] = pts2d_oview[0, :] - xxf
-        flowgt[yyf.astype(np.int), xxf.astype(np.int), 1] = pts2d_oview[1, :] - yyf
+        flowgt[yyf.astype(np.int)[selector], xxf.astype(np.int)[selector], 0] = pts2d_oview[0, :][selector] - xxf[selector]
+        flowgt[yyf.astype(np.int)[selector], xxf.astype(np.int)[selector], 1] = pts2d_oview[1, :][selector] - yyf[selector]
         return flowgt
 
     def __len__(self):

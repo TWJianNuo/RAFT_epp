@@ -22,7 +22,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_raft_fixation.core_raft_smallupdate.raft import RAFT
+from core.raft import RAFT
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -61,38 +61,6 @@ MAX_FLOW = 400
 SUM_FREQ = 100
 VAL_FREQ = 5000
 
-class SSIM(nn.Module):
-    """Layer to compute the SSIM loss between a pair of images
-    """
-    def __init__(self):
-        super(SSIM, self).__init__()
-        self.mu_x_pool   = nn.AvgPool2d(3, 1)
-        self.mu_y_pool   = nn.AvgPool2d(3, 1)
-        self.sig_x_pool  = nn.AvgPool2d(3, 1)
-        self.sig_y_pool  = nn.AvgPool2d(3, 1)
-        self.sig_xy_pool = nn.AvgPool2d(3, 1)
-
-        self.refl = nn.ReflectionPad2d(1)
-
-        self.C1 = 0.01 ** 2
-        self.C2 = 0.03 ** 2
-
-    def forward(self, x, y):
-        x = self.refl(x)
-        y = self.refl(y)
-
-        mu_x = self.mu_x_pool(x)
-        mu_y = self.mu_y_pool(y)
-
-        sigma_x  = self.sig_x_pool(x ** 2) - mu_x ** 2
-        sigma_y  = self.sig_y_pool(y ** 2) - mu_y ** 2
-        sigma_xy = self.sig_xy_pool(x * y) - mu_x * mu_y
-
-        SSIM_n = (2 * mu_x * mu_y + self.C1) * (2 * sigma_xy + self.C2)
-        SSIM_d = (mu_x ** 2 + mu_y ** 2 + self.C1) * (sigma_x + sigma_y + self.C2)
-
-        return torch.clamp((1 - SSIM_n / SSIM_d) / 2, 0, 1)
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -120,148 +88,31 @@ class Logger:
         if self.writer is None:
             self.writer = SummaryWriter(self.logpath)
 
-    def write_vls(self, data_blob, outputs, depthselector, step):
+    def write_vls(self, data_blob, outputs, flowselector, step):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
-        figmask_depth = tensor2disp(depthselector, vmax=1, viewind=0)
+        figmask_flow = tensor2disp(flowselector, vmax=1, viewind=0)
         insvls = vls_ins(img1, insmap)
 
-        depthpredvls = tensor2disp(1 / outputs['depth_predictions'][-1], vmax=0.15, viewind=0)
-        flowvls = flow_to_image(outputs['flowpred'][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
-        imgrecon = tensor2rgb(outputs['img1_recon'], viewind=0)
+        flowvls = flow_to_image(outputs[-1][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
 
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(figmask_depth)], axis=1)
-        img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(flowvls)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
+        img_val_mid2 = np.concatenate([np.array(flowvls), np.array(figmask_flow)], axis=1)
+        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-        X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowgt_vls'], data_blob['insmap'], outputs)
-        self.writer.add_image('X', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
-
-    def vls_sampling(self, img1, img2, depthgt, flowmap, insmap, outputs):
-        depthgtnp = depthgt[0].squeeze().cpu().numpy()
-        insmapnp = insmap[0].squeeze().cpu().numpy()
-        flowmapnp = flowmap[0].cpu().numpy()
-
-        h, w, _ = img1.shape
-        xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
-        selector = (depthgtnp > 0) * (flowmapnp[0] != 0)
-
-        flowx = outputs['flowpred'][0, 0].detach().cpu().numpy()
-        flowy = outputs['flowpred'][0, 1].detach().cpu().numpy()
-        flowxf = flowx[selector]
-        flowyf = flowy[selector]
-
-        xxf = xx[selector]
-        yyf = yy[selector]
-        df = depthgtnp[selector]
-
-        dsratio = 8
-        slRange_sel = (np.mod(xx, dsratio) == 0) * (np.mod(yy, dsratio) == 0) * (depthgtnp > 0) * (insmapnp > 0)
-        if np.sum(slRange_sel) > 0:
-            xxfsl = xx[slRange_sel]
-            yyfsl = yy[slRange_sel]
-            rndidx = np.random.randint(0, xxfsl.shape[0], 1).item()
-
-            xxfsl_sel = xxfsl[rndidx]
-            yyfsl_sel = yyfsl[rndidx]
-
-            xxfsl_sel_fg = xxfsl_sel
-            yyfsl_sel_fg = yyfsl_sel
-
-            slvlsxx_fg = outputs['local_sample_pts2ds'][-1][0, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), :, 0].detach().cpu().numpy()
-            slvlsxx_fg = (slvlsxx_fg + 1) / 2 * w
-
-            slvlsyy_fg = outputs['local_sample_pts2ds'][-1][0, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), :, 1].detach().cpu().numpy()
-            slvlsyy_fg = (slvlsyy_fg + 1) / 2 * h
-        else:
-            slvlsxx_fg = None
-            slvlsyy_fg = None
-
-        slRange_sel = (np.mod(xx, dsratio) == 0) * (np.mod(yy, dsratio) == 0) * selector * (insmapnp == 0)
-        if np.sum(slRange_sel) > 0:
-            xxfsl = xx[slRange_sel]
-            yyfsl = yy[slRange_sel]
-            rndidx = np.random.randint(0, xxfsl.shape[0], 1).item()
-
-            xxfsl_sel = xxfsl[rndidx]
-            yyfsl_sel = yyfsl[rndidx]
-
-            xxfsl_sel_bg = xxfsl_sel
-            yyfsl_sel_bg = yyfsl_sel
-
-            slvlsxx_bg = outputs['local_sample_pts2ds'][-1][0, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), :, 0].detach().cpu().numpy()
-            slvlsxx_bg = (slvlsxx_bg + 1) / 2 * w
-
-            slvlsyy_bg = outputs['local_sample_pts2ds'][-1][0, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), :, 1].detach().cpu().numpy()
-            slvlsyy_bg = (slvlsyy_bg + 1) / 2 * h
-
-            gtposx = xxfsl_sel + flowmapnp[0, yyfsl_sel, xxfsl_sel]
-            gtposy = yyfsl_sel + flowmapnp[0, yyfsl_sel, xxfsl_sel]
-        else:
-            slvlsxx_bg = None
-            slvlsyy_bg = None
-
-        cm = plt.get_cmap('magma')
-        rndcolor = cm(1 / df / 0.15)[:, 0:3]
-
-        fig = plt.figure(figsize=(16, 9))
-        canvas = FigureCanvasAgg(fig)
-        fig.add_subplot(2, 2, 1)
-        plt.scatter(xxf, yyf, 3, rndcolor)
-        if slvlsxx_fg is not None and slvlsyy_fg is not None:
-            plt.scatter(xxfsl_sel_fg, yyfsl_sel_fg, 10, 'r')
-        if slvlsxx_bg is not None and slvlsyy_bg is not None:
-            plt.scatter(xxfsl_sel_bg, yyfsl_sel_bg, 10, 'r')
-        plt.imshow(img1)
-        plt.title("Input")
-
-        fig.add_subplot(2, 2, 2)
-        plt.scatter(xxf + flowxf, yyf + flowyf, 3, rndcolor)
-        plt.imshow(img2)
-        plt.title("Fixed Prediction")
-
-        fig.add_subplot(2, 2, 3)
-        if slvlsxx_fg is not None and slvlsyy_fg is not None:
-            plt.scatter(slvlsxx_fg, slvlsyy_fg, 3, 'b')
-            plt.scatter(xxfsl_sel_fg, yyfsl_sel_fg, 10, 'g')
-        if slvlsxx_bg is not None and slvlsyy_bg is not None:
-            plt.scatter(slvlsxx_bg, slvlsyy_bg, 3, 'b')
-            plt.scatter(xxfsl_sel_bg, yyfsl_sel_bg, 10, 'g')
-            plt.scatter(gtposx, gtposy, 7, 'r')
-        plt.imshow(img2)
-        plt.title("Sampling Arae")
-
-        fig.tight_layout()  # Or equivalently,  "plt.tight_layout()"
-        canvas.draw()
-        buf = canvas.buffer_rgba()
-        plt.close()
-        X = np.asarray(buf)
-        return X
 
     def write_vls_eval(self, data_blob, outputs, tagname, step):
         img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
         insmap = data_blob['insmap'][0].squeeze().numpy()
 
         insvls = vls_ins(img1, insmap)
 
-        depthpredvls = tensor2disp(1 / outputs['depth_predictions'][-1], vmax=0.15, viewind=0)
-        depthgtvls = tensor2disp(1 / data_blob['depthmap'], vmax=0.15, viewind=0)
-        flowvls = flow_to_image(outputs['flowpred'][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
-        imgrecon = tensor2rgb(outputs['img1_recon'], viewind=0)
+        flowvls = flow_to_image(outputs[-1][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
 
-        img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid2 = np.concatenate([np.array(depthpredvls), np.array(depthgtvls)], axis=1)
-        img_val_mid3 = np.concatenate([np.array(imgrecon), np.array(flowvls)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
-        self.writer.add_image('{}_predvls'.format(tagname), (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-        X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowmap'], data_blob['insmap'], outputs)
-        self.writer.add_image('{}_X'.format(tagname), (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
+        img_val_up = np.concatenate([np.array(insvls), np.array(flowvls)], axis=1)
+        self.writer.add_image('{}_predvls'.format(tagname), (torch.from_numpy(img_val_up).float() / 255).permute([2, 0, 1]), step)
 
     def write_dict(self, results, step):
         for key in results:
@@ -270,37 +121,12 @@ class Logger:
     def close(self):
         self.writer.close()
 
-def compute_errors(gt, pred):
-    thresh = np.maximum((gt / pred), (pred / gt))
-
-    d1 = (thresh < 1.25).mean()
-    d2 = (thresh < 1.25 ** 2).mean()
-    d3 = (thresh < 1.25 ** 3).mean()
-
-    rms = (gt - pred) ** 2
-    rms = np.sqrt(rms.mean())
-
-    log_rms = (np.log(gt) - np.log(pred)) ** 2
-    log_rms = np.sqrt(log_rms.mean())
-
-    abs_rel = np.mean(np.abs(gt - pred) / gt)
-    sq_rel = np.mean(((gt - pred) ** 2) / gt)
-
-    err = np.log(pred) - np.log(gt)
-    silog = np.sqrt(np.mean(err ** 2) - np.mean(err) ** 2) * 100
-
-    err = np.abs(np.log10(pred) - np.log10(gt))
-    log10 = np.mean(err)
-
-    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
-
 @torch.no_grad()
 def validate_kitti(model, args, eval_loader, logger, group, total_steps):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_measures_depth = torch.zeros(10).cuda(device=gpu)
     eval_epe = torch.zeros(2).cuda(device=gpu)
     eval_out = torch.zeros(2).cuda(device=gpu)
 
@@ -314,34 +140,15 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         depthpred = data_blob['depthpred'].cuda(gpu)
         flowmap = data_blob['flowmap'].cuda(gpu)
 
-        selfpose_gt = data_blob['rel_pose'].cuda(gpu)
-        fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
+        outputs = model(image1, image2, iters=args.iters)
 
-        if args.hasinitial:
-            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
-        else:
-            outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
-
-        depth_predictions = outputs['depth_predictions']
-
-        depth_prediction = depth_predictions[-1]
-
-        selector = ((depthgt > 0) * (depth_prediction > 0)).float()
-        depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
-        pred_depth_flatten = depth_prediction[selector == 1].cpu().numpy()
-
-        eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
-
-        eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
-        eval_measures_depth[9] += 1
-
-        flowpred = outputs['flowpred']
+        flowpred = outputs[-1]
         epe = torch.sum((flowmap - flowpred)**2, dim=1).sqrt()
         mag = torch.sum(flowmap**2, dim=1).sqrt()
 
         epe = epe.view(-1)
         mag = mag.view(-1)
-        val = mag.view(-1) >= 0.5
+        val = (mag.view(-1) >= 0.5) *(mag.view(-1) < MAX_FLOW)
 
         out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
         eval_epe[0] += epe[val].mean()
@@ -355,34 +162,19 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
             logger.write_vls_eval(data_blob, outputs, tag, total_steps)
 
     if args.distributed:
-        dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
         dist.all_reduce(tensor=eval_epe, op=dist.ReduceOp.SUM, group=group)
         dist.all_reduce(tensor=eval_out, op=dist.ReduceOp.SUM, group=group)
 
+
     if args.gpu == 0:
-        eval_measures_depth[0:9] = eval_measures_depth[0:9] / eval_measures_depth[9]
-        eval_measures_depth = eval_measures_depth.cpu().numpy()
         eval_epe[0] = eval_epe[0] / eval_epe[1]
         eval_epe = eval_epe.cpu().numpy()
         eval_out[0] = eval_out[0] / eval_out[1]
         eval_out = eval_out.cpu().numpy()
-        print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
-        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'out'))
-        for i in range(9):
-            print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
-        print('{:7.3f}'.format(eval_out[0]))
+        print("eval {} samples, out: {}".format(eval_out[1], eval_out[0]))
 
-        return {'silog': float(eval_measures_depth[0]),
-                'abs_rel': float(eval_measures_depth[1]),
-                'log10': float(eval_measures_depth[2]),
-                'rms': float(eval_measures_depth[3]),
-                'sq_rel': float(eval_measures_depth[4]),
-                'log_rms': float(eval_measures_depth[5]),
-                'd1': float(eval_measures_depth[6]),
-                'd2': float(eval_measures_depth[7]),
-                'd3': float(eval_measures_depth[8]),
-                'out': float(eval_out[0]),
-                'epe': float(eval_epe[0]),
+        return {'out': float(eval_out[0]),
+                'epe': float(eval_epe[0])
                 }
     else:
         return None
@@ -393,31 +185,22 @@ def read_splits():
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     return train_entries, evaluation_entries
 
-def sequence_logdepth_loss(logdepth_predictions, logdepthgt, valid, gamma=0.8):
+def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
     """ Loss function defined over sequence of flow predictions """
 
-    n_predictions = len(logdepth_predictions)
-    logdepth_loss = 0.0
+    n_predictions = len(flow_preds)
+    flow_loss = 0.0
+
+    # exlude invalid pixels and extremely large diplacements
+    mag = torch.sum(flow_gt**2, dim=1).sqrt()
+    valid = (valid >= 0.5) & (mag < max_flow)
 
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
-        i_loss = ((logdepth_predictions[i] - logdepthgt).abs() * valid).sum() / (valid.sum() + 1)
-        logdepth_loss += i_weight * i_loss
+        i_loss = (flow_preds[i] - flow_gt).abs()
+        flow_loss += i_weight * (valid[:, None] * i_loss).sum() / (valid.sum() + 1)
 
-    return logdepth_loss
-
-def sequence_depth_loss(depth_predictions, depthgt, valid, silog_criterion, gamma=0.8):
-    """ Loss function defined over sequence of flow predictions """
-
-    n_predictions = len(depth_predictions)
-    depth_loss = 0.0
-
-    for i in range(n_predictions):
-        i_weight = gamma**(n_predictions - i - 1)
-        loss = silog_criterion.forward(depth_predictions[i], depthgt, valid.to(torch.bool))
-        depth_loss += i_weight * loss
-
-    return depth_loss
+    return flow_loss
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -478,7 +261,7 @@ def train(gpu, ngpus_per_node, args):
 
     VAL_FREQ = 5000
     epoch = 0
-    maxa1 = 0
+    minout = 0
 
     st = time.time()
     should_keep_training = True
@@ -489,32 +272,17 @@ def train(gpu, ngpus_per_node, args):
 
             image1 = data_blob['img1'].cuda(gpu) / 255.0
             image2 = data_blob['img2'].cuda(gpu) / 255.0
-            intrinsic = data_blob['intrinsic'].cuda(gpu)
-            insmap = data_blob['insmap'].cuda(gpu)
-            depthgt = data_blob['depthmap'].cuda(gpu)
-            depthpred = data_blob['depthpred'].cuda(gpu)
-            posepred = data_blob['posepred'].cuda(gpu)
-            logdepthgt = torch.log(depthgt + 1e-10)
+            flowmap = data_blob['flowmap'].cuda(gpu)
 
-            silog_criterion = silog_loss(variance_focus=args.variance_focus)
+            outputs = model(image1, image2)
 
-            selfpose_gt = data_blob['rel_pose'].cuda(gpu)
-            fixed_posepred = (selfpose_gt @ torch.inverse(posepred[:, 0])).unsqueeze(1).expand([-1, args.maxinsnum, -1, -1]) @ posepred
-
-            if args.hasinitial:
-                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, initialdepth=depthpred, iters=args.iters)
-            else:
-                outputs = model(image1, image2, intrinsic, fixed_posepred, insmap, iters=args.iters)
-
-            depth_predictions = outputs['depth_predictions']
-
-            depth_selector = (depthgt > 0).float()
-            dloss = sequence_depth_loss(depth_predictions, depthgt, depth_selector, gamma=args.gamma, silog_criterion=silog_criterion)
+            selector = (flowmap[:, 0, :, :] != 0)
+            flow_loss = sequence_loss(outputs, flowmap, selector, gamma=args.gamma, max_flow=MAX_FLOW)
 
             metrics = dict()
-            metrics['depthloss'] = dloss.item()
+            metrics['flow_loss'] = flow_loss
 
-            loss = dloss
+            loss = flow_loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
@@ -526,8 +294,8 @@ def train(gpu, ngpus_per_node, args):
                 if total_steps % SUM_FREQ == 0:
                     dr = time.time() - st
                     resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, depthloss: %f" % (total_steps, resths, dloss.item()))
-                    logger.write_vls(data_blob, outputs, depth_selector, total_steps)
+                    print("Step: %d, rest hour: %f, flowloss: %f" % (total_steps, resths, flow_loss.item()))
+                    logger.write_vls(data_blob, outputs, selector.unsqueeze(1), total_steps)
 
             if total_steps % VAL_FREQ == 1:
                 if args.gpu == 0:
@@ -537,9 +305,9 @@ def train(gpu, ngpus_per_node, args):
 
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
-                    if maxa1 < results['d1']:
-                        maxa1 = results['d1']
-                        PATH = os.path.join(logroot, 'maxa1.pth')
+                    if minout > results['out']:
+                        minout = results['out']
+                        PATH = os.path.join(logroot, 'minout.pth')
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
 
@@ -582,8 +350,9 @@ if __name__ == '__main__':
     parser.add_argument('--max_updatescale', type=float, default=0.5)
     parser.add_argument('--sample_range', type=float, default=1.5)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
-    parser.add_argument('--iters', type=int, default=6)
-    parser.add_argument('--hasinitial', action='store_true')
+    parser.add_argument('--iters', type=int, default=12)
+    parser.add_argument('--small', action='store_true', help='use small model')
+    parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
 
     parser.add_argument('--tscale_range', type=float, default=3)
     parser.add_argument('--objtscale_range', type=float, default=10)

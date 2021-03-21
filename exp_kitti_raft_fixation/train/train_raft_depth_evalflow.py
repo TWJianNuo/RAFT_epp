@@ -478,7 +478,7 @@ def train(gpu, ngpus_per_node, args):
 
     VAL_FREQ = 5000
     epoch = 0
-    maxa1 = 0
+    minout = 0
 
     st = time.time()
     should_keep_training = True
@@ -537,9 +537,9 @@ def train(gpu, ngpus_per_node, args):
 
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
-                    if maxa1 < results['d1']:
-                        maxa1 = results['d1']
-                        PATH = os.path.join(logroot, 'maxa1.pth')
+                    if minout > results['out']:
+                        minout = results['out']
+                        PATH = os.path.join(logroot, 'minout.pth')
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
 
@@ -582,7 +582,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_updatescale', type=float, default=0.5)
     parser.add_argument('--sample_range', type=float, default=1.5)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
-    parser.add_argument('--iters', type=int, default=6)
+    parser.add_argument('--iters', type=int, default=12)
     parser.add_argument('--hasinitial', action='store_true')
 
     parser.add_argument('--tscale_range', type=float, default=3)
