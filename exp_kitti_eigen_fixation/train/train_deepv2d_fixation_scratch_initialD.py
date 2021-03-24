@@ -22,7 +22,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scratch import EppFlowNet
+from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scale_initialD import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -248,7 +248,7 @@ def compute_errors(gt, pred):
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, logger, group, total_steps):
+def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=False):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
@@ -263,10 +263,16 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         posepred = data_blob['posepred'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
 
-        outputs = model(image1, image2, intrinsic, posepred, insmap)
+        mD_pred = data_blob['depthpred'].cuda(gpu)
+        mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
-        predread = outputs[('depth', 2)]
-        selector = ((depthgt > 0) * (predread > 0)).float()
+        if not isorg:
+            outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
+            predread = outputs[('depth', 2)]
+        else:
+            predread = mD_pred
+
+        selector = ((depthgt > 0) * (predread > 0) * (mD_pred > 0)).float()
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
@@ -275,7 +281,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
         eval_measures_depth[9] += 1
 
-        if not(logger is None) and np.mod(val_id, 20) == 0:
+        if not(logger is None) and np.mod(val_id, 20) == 0 and not isorg:
             seq, frmidx = data_blob['tag'][0].split(' ')
             tag = "{}_{}".format(seq.split('/')[-1], frmidx)
             logger.write_vls_eval(data_blob, outputs, tag, total_steps)
@@ -331,9 +337,9 @@ def get_reprojection_loss(img1, insmap, outputs, ssim):
     reprojloss = reprojloss / 2
     return reprojloss, selector
 
-def get_depth_loss(depthgt, outputs, silog_criterion):
+def get_depth_loss(depthgt, mD_pred, outputs, silog_criterion):
     _, _, h, w = depthgt.shape
-    selector = (depthgt > 0)
+    selector = (depthgt > 0) * (mD_pred > 0)
     depthloss = 0
     for k in range(1, 3, 1):
         tmpselector = (selector * (outputs[('depth', k)] > 0)).float()
@@ -375,7 +381,7 @@ def train(gpu, ngpus_per_node, args):
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
                                 depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root,
-                                istrain=True, muteaug=False, banremovedup=False, isgarg=True)
+                                istrain=True, muteaug=False, banremovedup=False, isgarg=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
@@ -420,9 +426,12 @@ def train(gpu, ngpus_per_node, args):
             insmap = data_blob['insmap'].cuda(gpu)
             depthgt = data_blob['depthmap'].cuda(gpu)
             posepred = data_blob['posepred'].cuda(gpu)
+            mD_pred = data_blob['depthpred'].cuda(gpu)
 
-            outputs = model(image1, image2, intrinsic, posepred, insmap)
-            depthloss, depthselector = get_depth_loss(depthgt=depthgt, outputs=outputs, silog_criterion=silog_criterion)
+            mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
+
+            outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
+            depthloss, depthselector = get_depth_loss(depthgt=depthgt, mD_pred=mD_pred, outputs=outputs, silog_criterion=silog_criterion)
 
             metrics = dict()
             metrics['depthloss'] = depthloss.item()
@@ -444,9 +453,9 @@ def train(gpu, ngpus_per_node, args):
 
             if total_steps % VAL_FREQ == 1:
                 if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps)
+                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isorg=False)
                 else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None)
+                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isorg=False)
 
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
@@ -455,6 +464,12 @@ def train(gpu, ngpus_per_node, args):
                         PATH = os.path.join(logroot, 'maxa1.pth')
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
+
+                if args.gpu == 0:
+                    results = validate_kitti(model.module, args, eval_loader, None, group, total_steps, isorg=True)
+                    logger_evaluation_org.write_dict(results, total_steps)
+                else:
+                    validate_kitti(model.module, args, eval_loader, None, group, None, isorg=True)
 
                 model.train()
 
@@ -495,6 +510,8 @@ if __name__ == '__main__':
     parser.add_argument('--variance_focus', type=float,
                         help='lambda in paper: [0, 1], higher value more focus on minimizing variance of error',
                         default=0.85)
+    parser.add_argument('--maxlogscale', type=float, default=1.5)
+
 
     parser.add_argument('--tscale_range', type=float, default=3)
     parser.add_argument('--objtscale_range', type=float, default=10)

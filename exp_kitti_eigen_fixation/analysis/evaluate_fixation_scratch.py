@@ -122,6 +122,94 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
     else:
         return None
 
+MAX_FLOW = 400
+
+@torch.no_grad()
+def validate_kitti_flow(model, args, eval_loader, logger, group, total_steps, isdeepv2d=False):
+    """ Peform validation using the KITTI-2015 (train) split """
+    """ Peform validation using the KITTI-2015 (train) split """
+    model.eval()
+    gpu = args.gpu
+    eval_measures_depth = torch.zeros(10).cuda(device=gpu)
+    eval_epe = torch.zeros(2).cuda(device=gpu)
+    eval_out = torch.zeros(2).cuda(device=gpu)
+
+    for val_id, data_blob in enumerate(tqdm(eval_loader)):
+        image1 = data_blob['img1'].cuda(gpu) / 255.0
+        image2 = data_blob['img2'].cuda(gpu) / 255.0
+        intrinsic = data_blob['intrinsic'].cuda(gpu)
+        insmap = data_blob['insmap'].cuda(gpu)
+        posepred = data_blob['posepred'].cuda(gpu)
+        depthgt = data_blob['depthmap'].cuda(gpu)
+        depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
+        flowmap = data_blob['flowmap'].cuda(gpu)
+        posegt = data_blob['rel_pose'].cuda(gpu)
+
+        if not isdeepv2d:
+            outputs = model(image1, image2, intrinsic, posepred, insmap)
+            predread = outputs[('depth', 2)]
+            flowpred = model.depth2flow(depth=predread, intrinsic=intrinsic, posepred=posegt, insmap=insmap)
+        else:
+            outputs = model(image1, image2, intrinsic, posepred, insmap)
+            predread = depthpred_deepv2d
+            flowpred = model.depth2flow(depth=predread, intrinsic=intrinsic, posepred=posegt, insmap=insmap)
+        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * depthpred_deepv2d > 0).float()
+        predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
+        depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
+        pred_depth_flatten = predread[selector == 1].cpu().numpy()
+
+        pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
+
+        eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
+
+        eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
+        eval_measures_depth[9] += 1
+
+        # flowpred = outputs[('flowpred', 2)]
+        epe = torch.sum((flowmap - flowpred)**2, dim=1).sqrt()
+        mag = torch.sum(flowmap**2, dim=1).sqrt()
+
+        epe = epe.view(-1)
+        mag = mag.view(-1)
+        val = (mag.view(-1) >= 0.5) * (mag.view(-1) < MAX_FLOW)
+
+        out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
+        eval_epe[0] += epe[val].mean()
+        eval_epe[1] += 1
+        eval_out[0] += out[val].mean()
+        eval_out[1] += 1
+
+    if args.distributed:
+        dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(tensor=eval_epe, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(tensor=eval_out, op=dist.ReduceOp.SUM, group=group)
+
+    if args.gpu == 0:
+        eval_measures_depth[0:9] = eval_measures_depth[0:9] / eval_measures_depth[9]
+        eval_measures_depth = eval_measures_depth.cpu().numpy()
+        eval_epe[0] = eval_epe[0] / eval_epe[1]
+        eval_epe = eval_epe.cpu().numpy()
+        eval_out[0] = eval_out[0] / eval_out[1]
+        eval_out = eval_out.cpu().numpy()
+        print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
+        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', "out"))
+        for i in range(9):
+            print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
+        print('{:7.3f}'.format(eval_out[0]))
+
+        return {'silog': float(eval_measures_depth[0]),
+                'abs_rel': float(eval_measures_depth[1]),
+                'log10': float(eval_measures_depth[2]),
+                'rms': float(eval_measures_depth[3]),
+                'sq_rel': float(eval_measures_depth[4]),
+                'log_rms': float(eval_measures_depth[5]),
+                'd1': float(eval_measures_depth[6]),
+                'd2': float(eval_measures_depth[7]),
+                'd3': float(eval_measures_depth[8])
+                }
+    else:
+        return None
+
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
@@ -168,9 +256,10 @@ def train(gpu, ngpus_per_node, args):
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
-    validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
-    validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
-
+    # validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
+    # validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
+    # validate_kitti_flow(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
+    validate_kitti_flow(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
     return
 
 

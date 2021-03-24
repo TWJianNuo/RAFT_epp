@@ -318,7 +318,9 @@ class KITTI_eigen(data.Dataset):
         return data_blob
 
     def pad_clip_ins(self, insmap, posepred):
-        posepred_pad = np.zeros([self.maxinsnum, 4, 4])
+        # posepred_pad = np.zeros([self.maxinsnum, 4, 4])
+        posepred_pad = np.eye(4)
+        posepred_pad = np.repeat(np.expand_dims(posepred_pad, axis=0), self.maxinsnum, axis=0)
         currentins = posepred.shape[0]
 
         if currentins > self.maxinsnum:

@@ -36,93 +36,37 @@ from torch.autograd import Variable
 
 from tqdm import tqdm
 
-try:
-    from torch.cuda.amp import GradScaler
-except:
-    # dummy GradScaler for PyTorch < 1.6
-    class GradScaler:
-        def __init__(self):
-            pass
-
-        def scale(self, loss):
-            return loss
-
-        def unscale_(self, optimizer):
-            pass
-
-        def step(self, optimizer):
-            optimizer.step()
-
-        def update(self):
-            pass
-
-# exclude extremly large displacements
-MAX_FLOW = 400
-SUM_FREQ = 100
-VAL_FREQ = 5000
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def fetch_optimizer(args, model, steps_per_epoch):
-    """ Create the optimizer and learning rate scheduler """
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=20, steps_per_epoch=steps_per_epoch, pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
-    return optimizer, scheduler
+def compute_errors(gt, pred):
+    thresh = np.maximum((gt / pred), (pred / gt))
 
-class silog_loss(nn.Module):
-    def __init__(self, variance_focus):
-        super(silog_loss, self).__init__()
-        self.variance_focus = variance_focus
+    d1 = (thresh < 1.25).mean()
+    d2 = (thresh < 1.25 ** 2).mean()
+    d3 = (thresh < 1.25 ** 3).mean()
 
-    def forward(self, depth_est, depth_gt, mask):
-        d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
-        return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
+    rms = (gt - pred) ** 2
+    rms = np.sqrt(rms.mean())
 
-class Logger:
-    def __init__(self, logpath):
-        self.logpath = logpath
-        self.writer = None
+    log_rms = (np.log(gt) - np.log(pred)) ** 2
+    log_rms = np.sqrt(log_rms.mean())
 
-    def create_summarywriter(self):
-        if self.writer is None:
-            self.writer = SummaryWriter(self.logpath)
+    abs_rel = np.mean(np.abs(gt - pred) / gt)
+    sq_rel = np.mean(((gt - pred) ** 2) / gt)
 
-    def write_vls(self, data_blob, outputs, flowselector, step):
-        img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        insmap = data_blob['insmap'][0].squeeze().numpy()
+    err = np.log(pred) - np.log(gt)
+    silog = np.sqrt(np.mean(err ** 2) - np.mean(err) ** 2) * 100
 
-        figmask_flow = tensor2disp(flowselector, vmax=1, viewind=0)
-        insvls = vls_ins(img1, insmap)
+    err = np.abs(np.log10(pred) - np.log10(gt))
+    log10 = np.mean(err)
 
-        flowvls = flow_to_image(outputs[-1][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
+    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
-        img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid2 = np.concatenate([np.array(flowvls), np.array(figmask_flow)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2)], axis=0)
-        self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-    def write_vls_eval(self, data_blob, outputs, tagname, step):
-        img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        insmap = data_blob['insmap'][0].squeeze().numpy()
-
-        insvls = vls_ins(img1, insmap)
-
-        flowvls = flow_to_image(outputs[-1][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=50)
-
-        img_val_up = np.concatenate([np.array(insvls), np.array(flowvls)], axis=1)
-        self.writer.add_image('{}_predvls'.format(tagname), (torch.from_numpy(img_val_up).float() / 255).permute([2, 0, 1]), step)
-
-    def write_dict(self, results, step):
-        for key in results:
-            self.writer.add_scalar(key, results[key], step)
-
-    def close(self):
-        self.writer.close()
+MAX_FLOW = 400
 
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, logger, group, total_steps):
+def validate_kitti(model, args, eval_loader, group):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
@@ -133,11 +77,6 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
-        intrinsic = data_blob['intrinsic'].cuda(gpu)
-        insmap = data_blob['insmap'].cuda(gpu)
-        posepred = data_blob['posepred'].cuda(gpu)
-        depthgt = data_blob['depthmap'].cuda(gpu)
-        depthpred = data_blob['depthpred'].cuda(gpu)
         flowmap = data_blob['flowmap'].cuda(gpu)
 
         outputs = model(image1, image2, iters=args.iters)
@@ -145,6 +84,8 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         flowpred = outputs[-1]
         epe = torch.sum((flowmap - flowpred)**2, dim=1).sqrt()
         mag = torch.sum(flowmap**2, dim=1).sqrt()
+
+        # Image.fromarray(flow_to_image(flowpred[0].permute([1,2,0]).cpu().numpy(), rad_max=50)).show()
 
         epe = epe.view(-1)
         mag = mag.view(-1)
@@ -155,11 +96,6 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps):
         eval_epe[1] += 1
         eval_out[0] += out[val].mean()
         eval_out[1] += 1
-
-        if not(logger is None) and np.mod(val_id, 20) == 0:
-            seq, frmidx = data_blob['tag'][0].split(' ')
-            tag = "{}_{}".format(seq.split('/')[-1], frmidx)
-            logger.write_vls_eval(data_blob, outputs, tag, total_steps)
 
     if args.distributed:
         dist.all_reduce(tensor=eval_epe, op=dist.ReduceOp.SUM, group=group)
@@ -183,23 +119,6 @@ def read_splits():
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     return train_entries, evaluation_entries
-
-def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
-    """ Loss function defined over sequence of flow predictions """
-
-    n_predictions = len(flow_preds)
-    flow_loss = 0.0
-
-    # exlude invalid pixels and extremely large diplacements
-    mag = torch.sum(flow_gt**2, dim=1).sqrt()
-    valid = (valid >= 0.5) & (mag < max_flow)
-
-    for i in range(n_predictions):
-        i_weight = gamma**(n_predictions - i - 1)
-        i_loss = (flow_preds[i] - flow_gt).abs()
-        flow_loss += i_weight * (valid[:, None] * i_loss).sum() / (valid.sum() + 1)
-
-    return flow_loss
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -232,98 +151,17 @@ def train(gpu, ngpus_per_node, args):
 
     train_entries, evaluation_entries = read_splits()
 
-    train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
-                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root,
-                                istrain=True, muteaug=False, banremovedup=False, isgarg=True)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
-
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, istrain=False, isgarg=True)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
-    print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
+    print("Test splits contain %d images" % (eval_dataset.__len__()))
 
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
-    optimizer, scheduler = fetch_optimizer(args, model, int(train_dataset.__len__() / 2))
-
-    total_steps = 0
-
-    if args.gpu == 0:
-        logger = Logger(logroot)
-        logger_evaluation = Logger(os.path.join(args.logroot, 'evaluation_eigen_background', args.name))
-        logger.create_summarywriter()
-        logger_evaluation.create_summarywriter()
-
-    VAL_FREQ = 5000
-    epoch = 0
-    minout = 1
-
-    st = time.time()
-    should_keep_training = True
-    while should_keep_training:
-        train_sampler.set_epoch(epoch)
-        for i_batch, data_blob in enumerate(train_loader):
-            optimizer.zero_grad()
-
-            image1 = data_blob['img1'].cuda(gpu) / 255.0
-            image2 = data_blob['img2'].cuda(gpu) / 255.0
-            flowmap = data_blob['flowmap'].cuda(gpu)
-
-            outputs = model(image1, image2)
-
-            selector = (flowmap[:, 0, :, :] != 0)
-            flow_loss = sequence_loss(outputs, flowmap, selector, gamma=args.gamma, max_flow=MAX_FLOW)
-
-            metrics = dict()
-            metrics['flow_loss'] = flow_loss
-
-            loss = flow_loss
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-
-            optimizer.step()
-            scheduler.step()
-
-            if args.gpu == 0:
-                logger.write_dict(metrics, step=total_steps)
-                if total_steps % SUM_FREQ == 0:
-                    dr = time.time() - st
-                    resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, flowloss: %f" % (total_steps, resths, flow_loss.item()))
-                    logger.write_vls(data_blob, outputs, selector.unsqueeze(1), total_steps)
-
-            if total_steps % VAL_FREQ == 1:
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps)
-                else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None)
-
-                if args.gpu == 0:
-                    logger_evaluation.write_dict(results, total_steps)
-                    if minout > results['out']:
-                        minout = results['out']
-                        PATH = os.path.join(logroot, 'minout.pth')
-                        torch.save(model.state_dict(), PATH)
-                        print("model saved to %s" % PATH)
-
-                model.train()
-
-            total_steps += 1
-
-            if total_steps > args.num_steps:
-                should_keep_training = False
-                break
-        epoch = epoch + 1
-
-    if args.gpu == 0:
-        logger.close()
-        PATH = os.path.join(logroot, 'final.pth')
-        torch.save(model.state_dict(), PATH)
-
+    validate_kitti(model.module, args, eval_loader, group)
     return
 
 
