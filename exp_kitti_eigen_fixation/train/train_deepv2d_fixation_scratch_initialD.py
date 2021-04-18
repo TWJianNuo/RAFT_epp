@@ -449,6 +449,8 @@ def train(gpu, ngpus_per_node, args):
             metrics['depthloss'] = depthloss.item()
 
             loss = depthloss
+            if torch.sum(torch.isnan(loss)) > 0:
+                print(data_blob['tag'])
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
 
