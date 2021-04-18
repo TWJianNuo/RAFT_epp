@@ -213,7 +213,7 @@ class Logger:
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid2), np.array(img_val_mid3)], axis=0)
         self.writer.add_image('{}_predvls'.format(tagname), (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
-        X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowmap'], data_blob['insmap'], outputs)
+        X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowgt_vls'], data_blob['insmap'], outputs)
         self.writer.add_image('{}_X'.format(tagname), (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
 
     def write_dict(self, results, step):
@@ -263,7 +263,10 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=F
         posepred = data_blob['posepred'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
 
-        mD_pred = data_blob['depthpred'].cuda(gpu)
+        if not args.initbymD:
+            mD_pred = data_blob['depthpred'].cuda(gpu)
+        else:
+            mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
         if not isorg:
@@ -375,18 +378,24 @@ def train(gpu, ngpus_per_node, args):
         checkpoint = torch.load(args.restore_ckpt, map_location=loc)
         model.load_state_dict(checkpoint, strict=False)
 
+    if not args.initbymD:
+        args.mdPred_root = None
+        print("Initialization with weak monocular estimation")
+    else:
+        print("Initialization with strong monocular estimation")
+
     model.train()
 
     train_entries, evaluation_entries = read_splits()
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
-                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root,
+                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                                 istrain=True, muteaug=False, banremovedup=False, isgarg=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
-                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, istrain=False, isgarg=True)
+                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root, istrain=False, isgarg=True)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
@@ -426,7 +435,10 @@ def train(gpu, ngpus_per_node, args):
             insmap = data_blob['insmap'].cuda(gpu)
             depthgt = data_blob['depthmap'].cuda(gpu)
             posepred = data_blob['posepred'].cuda(gpu)
-            mD_pred = data_blob['depthpred'].cuda(gpu)
+            if not args.initbymD:
+                mD_pred = data_blob['depthpred'].cuda(gpu)
+            else:
+                mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
 
             mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
@@ -531,9 +543,11 @@ if __name__ == '__main__':
     parser.add_argument('--depth_root', type=str)
     parser.add_argument('--depthvlsgt_root', type=str)
     parser.add_argument('--prediction_root', type=str)
+    parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
+    parser.add_argument('--initbymD', action='store_true')
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')

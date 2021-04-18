@@ -441,8 +441,9 @@ def validate_kitti(model, args, iters=24):
     model.eval()
     val_dataset = datasets.KITTI(split='training', root=args.dataset)
 
+    from tqdm import tqdm
     out_list, epe_list = [], []
-    for val_id in range(len(val_dataset)):
+    for _, val_id in enumerate(tqdm(list(range(len(val_dataset))))):
         image1, image2, flow_gt, valid_gt = val_dataset[val_id]
         image1 = image1[None].cuda()
         image2 = image2[None].cuda()
@@ -473,6 +474,64 @@ def validate_kitti(model, args, iters=24):
     print("Validation KITTI: %f, %f" % (epe, f1))
     return {'kitti-epe': epe, 'kitti-f1': f1}
 
+@torch.no_grad()
+def validate_kitti_colorjitter(model, args, iters=24):
+    """ Peform validation using the KITTI-2015 (train) split """
+    from torchvision.transforms import ColorJitter
+    from tqdm import tqdm
+    model.eval()
+    val_dataset = datasets.KITTI(split='training', root=args.dataset)
+
+    jitterparam = 0.86
+    photo_aug = ColorJitter(brightness=jitterparam, contrast=jitterparam, saturation=jitterparam, hue=jitterparam / 3.14)
+
+    def color_transform(img1, img2, photo_aug):
+        torch.manual_seed(1234)
+        np.random.seed(1234)
+        img1 = img1.permute([1, 2, 0]).numpy().astype(np.uint8)
+        img2 = img2.permute([1, 2, 0]).numpy().astype(np.uint8)
+        image_stack = np.concatenate([img1, img2], axis=0)
+        image_stack = np.array(photo_aug(Image.fromarray(image_stack)), dtype=np.uint8)
+        img1, img2 = np.split(image_stack, 2, axis=0)
+        img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
+        img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
+        return img1, img2
+
+    out_list, epe_list = [], []
+    for _, val_id in enumerate(tqdm(list(range(len(val_dataset))))):
+        image1, image2, flow_gt, valid_gt = val_dataset[val_id]
+        image1, image2 = color_transform(image1, image2, photo_aug)
+
+        image1 = image1[None].cuda()
+        image2 = image2[None].cuda()
+
+        padder = InputPadder(image1.shape, mode='kitti')
+        image1, image2 = padder.pad(image1, image2)
+
+        flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
+        flow = padder.unpad(flow_pr[0]).cpu()
+
+        epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
+        mag = torch.sum(flow_gt**2, dim=0).sqrt()
+
+        epe = epe.view(-1)
+        mag = mag.view(-1)
+        val = valid_gt.view(-1) >= 0.5
+
+        print("Index: %d, valnum: %d" % (val_id, torch.sum(valid_gt).item()))
+
+        out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
+        epe_list.append(epe[val].mean().item())
+        out_list.append(out[val].cpu().numpy())
+
+    epe_list = np.array(epe_list)
+    out_list = np.concatenate(out_list)
+
+    epe = np.mean(epe_list)
+    f1 = 100 * np.mean(out_list)
+
+    print("jitterparam:%f, Validation KITTI: %f, %f" % (jitterparam, epe, f1))
+    return {'kitti-epe': epe, 'kitti-f1': f1}
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -495,4 +554,5 @@ if __name__ == '__main__':
     with torch.no_grad():
         validate_kitti(model.module, args)
 
-
+    # with torch.no_grad():
+    #     validate_kitti_colorjitter(model.module, args)

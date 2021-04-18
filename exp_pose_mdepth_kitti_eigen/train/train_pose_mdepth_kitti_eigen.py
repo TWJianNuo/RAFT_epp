@@ -14,8 +14,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
