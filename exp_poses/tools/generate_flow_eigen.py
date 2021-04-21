@@ -19,6 +19,7 @@ from core.raft import RAFT
 from core.utils.utils import InputPadder, forward_interpolate, tensor2rgb
 from numpy.random import default_rng
 import matplotlib.pyplot as plt
+import torch.multiprocessing as mp
 
 def get_odomentries(args):
     import glob
@@ -56,52 +57,60 @@ def remove_dup(entries):
     return removed
 
 @torch.no_grad()
-def validate_kitti_colorjitter(model, args, iters=24):
+def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, iters=24):
     """ Peform validation using the KITTI-2015 (train) split """
+    interval = np.floor(len(eval_entries) / ngpus_per_node).astype(np.int).item()
+    if gpu == ngpus_per_node - 1:
+        stidx = int(interval * gpu)
+        edidx = len(eval_entries)
+    else:
+        stidx = int(interval * gpu)
+        edidx = int(interval * (gpu + 1))
+    print("Initialize Instance on Gpu %d, from %d to %d, total %d" % (gpu, stidx, edidx, len(eval_entries)))
     from tqdm import tqdm
     model.eval()
+    model.cuda(gpu)
+    with torch.no_grad():
+        for val_id, entry in enumerate(tqdm(remove_dup(eval_entries[stidx : edidx]))):
+            seq, index = entry.split(' ')
+            index = int(index)
 
-    evaluation_entries = read_splits(args)
-    for val_id, entry in enumerate(tqdm(remove_dup(evaluation_entries))):
-        seq, index = entry.split(' ')
-        index = int(index)
+            if os.path.exists(os.path.join(args.dataset, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))):
+                tmproot = args.dataset
+            else:
+                tmproot = args.odom_root
 
-        if os.path.exists(os.path.join(args.dataset, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))):
-            tmproot = args.dataset
-        else:
-            tmproot = args.odom_root
+            img1path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))
+            img2path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index + 1).zfill(10)))
 
-        img1path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))
-        img2path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index + 1).zfill(10)))
+            if not os.path.exists(img2path):
+                img2path = img1path
 
-        if not os.path.exists(img2path):
-            img2path = img1path
+            image1 = frame_utils.read_gen(img1path)
+            image2 = frame_utils.read_gen(img2path)
 
-        image1 = frame_utils.read_gen(img1path)
-        image2 = frame_utils.read_gen(img2path)
+            image1 = np.array(image1).astype(np.uint8)
+            image2 = np.array(image2).astype(np.uint8)
 
-        image1 = np.array(image1).astype(np.uint8)
-        image2 = np.array(image2).astype(np.uint8)
+            image1 = torch.from_numpy(image1).permute([2, 0, 1]).float()
+            image2 = torch.from_numpy(image2).permute([2, 0, 1]).float()
 
-        image1 = torch.from_numpy(image1).permute([2, 0, 1]).float()
-        image2 = torch.from_numpy(image2).permute([2, 0, 1]).float()
+            svfold = os.path.join(args.exportroot, seq, 'image_02')
+            svpath = os.path.join(args.exportroot, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
+            os.makedirs(svfold, exist_ok=True)
 
-        svfold = os.path.join(args.exportroot, seq, 'image_02')
-        svpath = os.path.join(args.exportroot, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
-        os.makedirs(svfold, exist_ok=True)
+            image1 = image1[None].cuda(gpu)
+            image2 = image2[None].cuda(gpu)
 
-        image1 = image1[None].cuda()
-        image2 = image2[None].cuda()
+            padder = InputPadder(image1.shape, mode='kitti')
+            image1, image2 = padder.pad(image1, image2)
 
-        padder = InputPadder(image1.shape, mode='kitti')
-        image1, image2 = padder.pad(image1, image2)
+            flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
+            flow = padder.unpad(flow_pr[0]).cpu()
 
-        flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
-        flow = padder.unpad(flow_pr[0]).cpu()
-
-        frame_utils.writeFlowKITTI(svpath, flow.permute(1, 2, 0).numpy())
-        # Image.fromarray(flow_viz.flow_to_image(flow.permute(1, 2, 0).numpy())).show()
-        # tensor2rgb(image1 / 255.0, viewind=0).show()
+            frame_utils.writeFlowKITTI(svpath, flow.permute(1, 2, 0).numpy())
+            # Image.fromarray(flow_viz.flow_to_image(flow.permute(1, 2, 0).numpy())).show()
+            # tensor2rgb(image1 / 255.0, viewind=0).show()
     return
 
 if __name__ == '__main__':
@@ -122,10 +131,10 @@ if __name__ == '__main__':
     model = torch.nn.DataParallel(RAFT(args))
     model.load_state_dict(torch.load(args.model))
 
-    model.cuda()
-    model.eval()
-
     torch.manual_seed(1234)
     np.random.seed(1234)
-    with torch.no_grad():
-        validate_kitti_colorjitter(model.module, args)
+
+    ngpus_per_node = torch.cuda.device_count()
+    evaluation_entries = read_splits(args)
+
+    mp.spawn(validate_kitti_colorjitter, nprocs=ngpus_per_node, args=(model.module, args, ngpus_per_node, evaluation_entries))
