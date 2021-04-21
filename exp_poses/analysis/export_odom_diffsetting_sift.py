@@ -193,17 +193,32 @@ def get_normed_ptsdist(pts2d1, pts2d2, E, intrinsic):
 
     return (loss_dist2d_1 + loss_dist2d_2) / 2
 
-def inf_pose_flow(img1, img2, flow_pr_inf, insmap, depthmap, mdDepth, intrinsic, pid, gradComputer=None, valid_flow=None, banins=False, mdDepth2=None):
+def inf_pose_flow(rgb, sift, flow_pr_inf, insmap, mdDepth, intrinsic, pid, gradComputer=None, banins=False, samplenum=50000):
+    rgbnp = rgb.squeeze().permute([1, 2, 0]).cpu().numpy().astype(np.uint8)
+    grey = cv2.cvtColor(rgbnp, cv2.COLOR_BGR2GRAY)
+    # Image.fromarray(grey).show()
+
     insmap_np = insmap[0, 0].cpu().numpy()
     intrinsicnp = intrinsic[0].cpu().numpy()
     dummyh = 370
-    samplenum = 50000
     gradbar = 0.9
-    staticbar = 0.8
-    _, _, h, w = img1.shape
+    _, _, h, w = insmap.shape
     border_sel = np.zeros([h, w])
     border_sel[int(0.25810811 * dummyh) : int(0.99189189 * dummyh)] = 1
     xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
+
+    siftselector = np.zeros([h, w], dtype=np.bool)
+    kps = sift.detect(grey, None)
+    # ptsrec = list()
+    for kp in kps:
+        pts2dtmp = np.round(kp.pt).astype(np.int)
+        if pts2dtmp[0] >= 0 and pts2dtmp[0] < w and pts2dtmp[1] >=0 and pts2dtmp[1] < h:
+            siftselector[pts2dtmp[1], pts2dtmp[0]] = 1
+            # ptsrec.append(pts2dtmp)
+    # ptsrec_np = np.stack(ptsrec, axis=0)
+    # plt.figure()
+    # plt.imshow(rgbnp)
+    # plt.scatter(ptsrec_np[:, 0], ptsrec_np[:, 1], 0.5)
 
     flow_pr_inf_x = flow_pr_inf[0, 0].cpu().numpy()
     flow_pr_inf_y = flow_pr_inf[0, 1].cpu().numpy()
@@ -211,22 +226,18 @@ def inf_pose_flow(img1, img2, flow_pr_inf, insmap, depthmap, mdDepth, intrinsic,
     xx_nf = xx + flow_pr_inf_x
     yy_nf = yy + flow_pr_inf_y
 
-    depthmap_np = depthmap.squeeze().cpu().numpy()
     mdDepth_np = mdDepth.squeeze().cpu().numpy()
-    if mdDepth2 is not None:
-        mdDepth2_np = mdDepth2.squeeze().cpu().numpy()
+
     if gradComputer is None:
-        depth_grad = np.zeros_like(depthmap_np)
+        depth_grad = np.zeros_like(mdDepth_np)
     else:
-        depth_grad = gradComputer.depth2grad(torch.from_numpy(depthmap_np).unsqueeze(0).unsqueeze(0)).squeeze().numpy()
-        depth_grad = depth_grad / depthmap_np
-        # tensor2disp(torch.from_numpy(depth_grad).unsqueeze(0).unsqueeze(0), percentile=95, viewind=0).show()
-        # tensor2disp(torch.from_numpy(depth_grad).unsqueeze(0).unsqueeze(0) > 0.9, percentile=95, viewind=0).show()
+        depth_grad = gradComputer.depth2grad(torch.from_numpy(mdDepth_np).unsqueeze(0).unsqueeze(0)).squeeze().numpy()
+        depth_grad = depth_grad / mdDepth_np
 
     if not banins:
-        selector = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * (insmap_np == 0) * border_sel * (depthmap_np > 0) * (depth_grad < gradbar)
+        selector = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * (insmap_np == 0) * border_sel * (depth_grad < gradbar) * (siftselector == 1)
     else:
-        selector = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * border_sel * (depthmap_np > 0) * (depth_grad < gradbar)
+        selector = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * border_sel * (depth_grad < gradbar) * (siftselector == 1)
     selector = selector == 1
 
     if samplenum > np.sum(selector):
@@ -238,21 +249,7 @@ def inf_pose_flow(img1, img2, flow_pr_inf, insmap, depthmap, mdDepth, intrinsic,
     xx_idx_sel = xx[selector][rndidx]
     yy_idx_sel = yy[selector][rndidx]
 
-    if valid_flow is not None:
-        valid_flow_np = valid_flow.squeeze().cpu().numpy()
-        mag_sel = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * (insmap_np == 0) * border_sel * (depth_grad < gradbar) * valid_flow_np
-    else:
-        mag_sel = (xx_nf > 0) * (xx_nf < w) * (yy_nf > 0) * (yy_nf < h) * (insmap_np == 0) * border_sel * (depth_grad < gradbar)
-    mag_sel = mag_sel == 1
-    flow_sel_mag = np.mean(np.sqrt(flow_pr_inf_x[mag_sel] ** 2 + flow_pr_inf_y[mag_sel] ** 2))
-
-    if flow_sel_mag < staticbar:
-        istatic = True
-    else:
-        istatic = False
-
-    # selvls = np.zeros([h, w])
-    # selvls[yy_idx_sel, xx_idx_sel] = 1
+    flow_sel_mag = np.mean(np.sqrt(flow_pr_inf_x[yy_idx_sel, xx_idx_sel] ** 2 + flow_pr_inf_y[yy_idx_sel, xx_idx_sel] ** 2))
 
     pts1 = np.stack([xx_idx_sel, yy_idx_sel], axis=1).astype(np.float)
     pts2 = np.stack([xx_nf[yy_idx_sel, xx_idx_sel], yy_nf[yy_idx_sel, xx_idx_sel]], axis=1).astype(np.float)
@@ -267,27 +264,19 @@ def inf_pose_flow(img1, img2, flow_pr_inf, insmap, depthmap, mdDepth, intrinsic,
 
     pts1_inliers = np.concatenate([pts1_inliers, np.ones([1, pts1_inliers.shape[1]])], axis=0)
     pts2_inliers = np.concatenate([pts2_inliers, np.ones([1, pts2_inliers.shape[1]])], axis=0)
-    coorespondedDepth = depthmap_np[selector][rndidx][inliers_mask]
-    scale = depth2scale(pts1_inliers, pts2_inliers, intrinsicnp, R, t, coorespondedDepth)
     scale_md = depth2scale(pts1_inliers, pts2_inliers, intrinsicnp, R, t, mdDepth_np[selector][rndidx][inliers_mask])
-    if mdDepth2 is not None:
-        scale_md_2 = depth2scale(pts1_inliers, pts2_inliers, intrinsicnp, R, t, mdDepth2_np[selector][rndidx][inliers_mask])
-    else:
-        scale_md_2 = 0
 
     if R[0, 0] < 0 or R[1, 1] < 0 or R[2, 2] < 0 or t[2] > 0:
         R = np.eye(3)
         t = np.array([[0, 0, -1]]).T
-        scale = 0
         scale_md = 0
-        scale_md_2 = 0
 
     # Image.fromarray(flow_to_image(flow_pr_inf[0].cpu().permute([1, 2, 0]).numpy())).show()
     # tensor2disp(torch.from_numpy(selector).unsqueeze(0).unsqueeze(0), vmax=1, viewind=0).show()
     # tensor2disp(depthmap > 0, vmax=1, viewind=0).show()
     # tensor2disp(torch.from_numpy(selvls).unsqueeze(0).unsqueeze(0), vmax=1, viewind=0).show()
 
-    return R, t, scale, scale_md, scale_md_2, flow_sel_mag, istatic
+    return R, t, scale_md, flow_sel_mag
 
 def readlines(filename):
     with open(filename, 'r') as f:
@@ -339,30 +328,32 @@ def compute_poseloss(poseest, posegt):
     return losst, lossang
 
 @torch.no_grad()
-def validate_RANSAC_odom_relpose(args, eval_loader):
-    gpu = 0
+def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False, samplenum=50000):
+    if bangrad:
+        gradComputer = None
+    else:
+        gradComputer = GradComputer()
+
+    foldname = "banins_{}_bangrad_{}_samplenum_{}_sift".format(banins, bangrad, samplenum)
+    exportfold = os.path.join(args.export_root, foldname)
+    os.makedirs(exportfold, exist_ok=True)
+
+    sift = cv2.SIFT_create()
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
-        image1 = data_blob['img1'].cuda(gpu)
-        image2 = data_blob['img2'].cuda(gpu)
-        insmap = data_blob['insmap'].cuda(gpu)
-        intrinsic = data_blob['intrinsic'].cuda(gpu)
-        depthgt = data_blob['depthmap'].cuda(gpu)
-        flowpred = data_blob['flowpred'].cuda(gpu)
-        mdDepth_pred = data_blob['mdDepth_pred'].cuda(gpu)
-        posepred_deepv2d = data_blob['posepred_deepv2d'].cuda(gpu)
+        rgb = data_blob['img1']
+        insmap = data_blob['insmap']
+        intrinsic = data_blob['intrinsic']
+        flowpred = data_blob['flowpred']
+        mdDepth_pred = data_blob['mdDepth_pred']
         tag = data_blob['tag']
 
-        R, t, scale, scale_md, scale_md_2, flow_sel_mag, _ = inf_pose_flow(image1, image2, flowpred, insmap, depthgt, mdDepth_pred, intrinsic, int(val_id + 10), gradComputer=None, banins=args.banins, mdDepth2=data_blob['depthpred_deepv2d'])
+        R, t, scale, flow_sel_mag = inf_pose_flow(rgb, sift, flowpred, insmap, mdDepth_pred, intrinsic, int(val_id + 10), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
 
-        pose_RANSAC = torch.clone(posepred_deepv2d)
-        pose_RANSAC[0, 0, 0:3, 0:3] = torch.from_numpy(R).float().cuda(intrinsic.device)
-        pose_RANSAC[0, 0, 0:3, 3:4] = torch.from_numpy(t).float().cuda(intrinsic.device)
-
-        export_dict = {'R': R, 't': t, 'flow_sel_mag': flow_sel_mag.item(), 'scale': scale, 'scale_md': scale_md, 'scale_md_2': scale_md_2}
+        export_dict = {'R': R, 't': t, 'flow_sel_mag': flow_sel_mag.item(), 'scale': scale}
         frameidx = int(tag[0].split(' ')[1])
-        export_fold = os.path.join(args.export_root, tag[0].split(' ')[0], 'image_02')
-        os.makedirs(export_fold, exist_ok=True)
-        export_root = os.path.join(export_fold, str(frameidx).zfill(10) + '.pickle')
+        exportfold2 = os.path.join(exportfold, tag[0].split(' ')[0], 'image_02')
+        os.makedirs(exportfold2, exist_ok=True)
+        export_root = os.path.join(exportfold2, str(frameidx).zfill(10) + '.pickle')
         with open(export_root, 'wb') as handle:
             pickle.dump(export_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -393,72 +384,38 @@ def train(args):
     seqmap, entries = generate_seqmapping()
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=entries, depth_root=args.depthvlsgt_root, depthvls_root=args.depthvlsgt_root,
-                               maxinsnum=args.maxinsnum, istrain=False, isgarg=True, flowPred_root=args.flowPred_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root, deepv2dpred_root=args.deepv2dpred_root)
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=0, drop_last=False, shuffle=False)
+                               maxinsnum=args.maxinsnum, istrain=False, isgarg=True, flowPred_root=args.flowPred_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=args.num_workers, drop_last=False, shuffle=False)
 
     print("Test splits contain %d images" % (eval_dataset.__len__()))
 
-    validate_RANSAC_odom_relpose(args, eval_loader)
+    validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum)
     return
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default='raft', help="name your experiment")
 
-    parser.add_argument('--lr', type=float, default=0.00002)
-    parser.add_argument('--num_steps', type=int, default=100000)
-    parser.add_argument('--batch_size', type=int, default=6)
-    parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
-    parser.add_argument('--inheight', type=int, default=320)
-    parser.add_argument('--inwidth', type=int, default=960)
-    parser.add_argument('--evalheight', type=int, default=320)
-    parser.add_argument('--evalwidth', type=int, default=1216)
+    parser.add_argument('--evalheight', type=int, default=1e10)
+    parser.add_argument('--evalwidth', type=int, default=1e10)
     parser.add_argument('--maxinsnum', type=int, default=50)
-    parser.add_argument('--min_depth_pred', type=float, default=1)
-    parser.add_argument('--max_depth_pred', type=float, default=85)
-    parser.add_argument('--min_depth_eval', type=float, default=1e-3)
-    parser.add_argument('--max_depth_eval', type=float, default=80)
 
-    parser.add_argument('--tscale_range', type=float, default=3)
-    parser.add_argument('--objtscale_range', type=float, default=10)
-    parser.add_argument('--angx_range', type=float, default=0.03)
-    parser.add_argument('--angy_range', type=float, default=0.06)
-    parser.add_argument('--angz_range', type=float, default=0.01)
-    parser.add_argument('--num_layers', type=int, default=50)
-    parser.add_argument('--num_deges', type=int, default=32)
-
-    parser.add_argument('--wdecay', type=float, default=.00005)
-    parser.add_argument('--epsilon', type=float, default=1e-8)
-    parser.add_argument('--clip', type=float, default=1.0)
-    parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--dataset_root', type=str)
-    parser.add_argument('--dataset_stereo15_orgned_root', type=str)
-    parser.add_argument('--semantics_root', type=str)
     parser.add_argument('--depth_root', type=str)
     parser.add_argument('--depthvlsgt_root', type=str)
-    parser.add_argument('--prediction_root', type=str)
-    parser.add_argument('--deepv2dpred_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
-    parser.add_argument('--odomPose_root', type=str)
     parser.add_argument('--flowPred_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--export_root', type=str)
-    parser.add_argument('--num_workers', type=int, default=12)
+    parser.add_argument('--num_workers', type=int, default=6)
     parser.add_argument('--banins', action='store_true')
+    parser.add_argument('--bangrad', action='store_true')
+    parser.add_argument('--samplenum', type=int, default=50000)
 
-    parser.add_argument('--distributed', default=True, type=bool)
-    parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
-    parser.add_argument('--dist_backend', type=str, help='distributed backend', default='nccl')
 
     args = parser.parse_args()
-    args.dist_url = args.dist_url.rstrip('1235') + str(np.random.randint(2000, 3000, 1).item())
 
     torch.manual_seed(1234)
     np.random.seed(1234)
-
-    torch.cuda.empty_cache()
-
-    ngpus_per_node = torch.cuda.device_count()
 
     train(args)

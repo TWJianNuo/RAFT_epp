@@ -310,7 +310,6 @@ class KITTI_eigen(data.Dataset):
         rel_pose = copy.deepcopy(self.pose_list[index])
         inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
 
-
         if self.prediction_root is not None:
             posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
             depthpred = np.array(Image.open(self.predDepthpath_list[index])).astype(np.float32) / 256.0
@@ -426,6 +425,12 @@ class KITTI_eigen(data.Dataset):
 
         crph = self.inheight
         crpw = self.inwidth
+
+        if crph >= h:
+            crph = h
+
+        if crpw >= w:
+            crpw = w
 
         if self.istrain:
             left = np.random.randint(0, w - crpw - 1, 1).item()

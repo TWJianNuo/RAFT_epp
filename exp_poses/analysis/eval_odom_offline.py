@@ -482,7 +482,7 @@ def validate_RANSAC_odom_offline_accum(args, seqmap, entries):
 
         pose_deepv2d_path = os.path.join(args.deepv2dpred_root, entry.split(' ')[0], 'posepred', str(frameidx).zfill(10) + '.txt')
         posepred_deepv2d = read_deepv2d_pose(pose_deepv2d_path)
-        posepred_deepv2d[0:3, 3:4] = posepred_deepv2d[0:3, 3:4] / np.sqrt(np.sum(posepred_deepv2d[0:3, 3:4] ** 2)) * scalegt
+        # posepred_deepv2d[0:3, 3:4] = posepred_deepv2d[0:3, 3:4] / np.sqrt(np.sum(posepred_deepv2d[0:3, 3:4] ** 2)) * scalegt
 
         # if scalegt < 0.1:
         #     pose_RANSAC = posegt
@@ -503,13 +503,16 @@ def validate_RANSAC_odom_offline_accum(args, seqmap, entries):
             accumerr[seq][k].append(loss_pos.item())
 
     accumerr_fin = dict()
+    print(accumerr.keys())
     for k in accumerr.keys():
+
         accumerr_fin[k] = dict()
         for kk in accumerr[k].keys():
-            # accumerr_fin[k][kk] = np.sum(np.array(accumerr[k][kk]))
-            accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
-        tmppos_rec = pos_recs[k]
+            accumerr_fin[k][kk] = np.sum(np.array(accumerr[k][kk]))
+            # accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
 
+        # tmppos_rec = pos_recs[k]
+        #
         # plt.figure()
         # for kk in accumerr[k].keys():
         #     accum_err = np.array(accumerr[k][kk])
@@ -529,6 +532,7 @@ def validate_RANSAC_odom_offline_accum(args, seqmap, entries):
     print(accumerr_fin)
 
 def validate_RANSAC_odom_offline_accum_absl(args, seqmap, entries):
+    # entries = entries[0:1000]
     accumerr = dict()
     pos_recs = dict()
     for val_id, entry in enumerate(tqdm(entries)):
@@ -574,7 +578,9 @@ def validate_RANSAC_odom_offline_accum_absl(args, seqmap, entries):
             pose_RANSAC[2, 3] = -1
         # pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * pose_RANSAC_dict['scale_md']
         # pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * pose_RANSAC_dict['scale']
-        pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * np.sqrt(np.sum(posepred_deepv2d[0:3, 3:4] ** 2))
+        # pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * pose_RANSAC_dict['scale_md_2']
+        # pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * np.sqrt(np.sum(posepred_deepv2d[0:3, 3:4] ** 2))
+        pose_RANSAC[0:3, 3:4] = pose_RANSAC[0:3, 3:4] * scalegt
 
         poses = dict()
         poses['pose_deepv2d'] = posepred_deepv2d
@@ -590,11 +596,42 @@ def validate_RANSAC_odom_offline_accum_absl(args, seqmap, entries):
             loss_pos = np.sqrt(np.sum((accumpos[k] - accumpos['pose_gt']) ** 2))
             accumerr[seq][k].append(loss_pos.item())
 
+    # accumerr_fin = dict()
+    # for k in accumerr.keys():
+    #     accumerr_fin[k] = dict()
+    #     for kk in accumerr[k].keys():
+    #         accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
+    # print(accumerr_fin)
+
     accumerr_fin = dict()
     for k in accumerr.keys():
         accumerr_fin[k] = dict()
         for kk in accumerr[k].keys():
+            # accumerr_fin[k][kk] = np.sum(np.array(accumerr[k][kk]))
             accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
+
+        if k == '2011_09_30_drive_0016_sync':
+            tmppos_rec = pos_recs[k]
+
+            # plt.figure()
+            # for kk in accumerr[k].keys():
+            #     accum_err = np.array(accumerr[k][kk])
+            #     plt.plot(accum_err)
+            # plt.title("Seq %s" % k)
+            # plt.legend(accumerr[k].keys())
+            # plt.show()
+
+            # plt.figure()
+            # for kk in tmppos_rec.keys():
+            #     tmppos = tmppos_rec[kk]
+            #     tmppos = np.stack(tmppos, axis=0)
+            #     plt.plot(tmppos[:,0,0], tmppos[:,2,0])
+            # plt.legend(list(tmppos_rec.keys()))
+            # plt.axis('scaled')
+            # plt.show()
+            # plt.savefig('/home/shengjie/Desktop/fig3.png')
+            #
+            # return
     print(accumerr_fin)
 
 def generate_seqmapping():
