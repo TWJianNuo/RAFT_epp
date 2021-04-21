@@ -110,7 +110,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', help="dataset for evaluation")
     parser.add_argument('--exportroot', help="dataset for evaluation")
     parser.add_argument('--small', action='store_true', help='use small model')
-    parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    parser.add_argument('--mixed_precision', action='store_true', help='use small model')
     parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
     parser.add_argument('--odom_root', type=str)
 
