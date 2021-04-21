@@ -664,9 +664,8 @@ if __name__ == '__main__':
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    entries = read_splits(args)
-    mp.spawn(train, nprocs=args.nprocs, args=(args, entries))
-    train(args)
+    # entries = read_splits(args)
+    # mp.spawn(train, nprocs=args.nprocs, args=(args, entries))
 
     seqmap, oval_entries = generate_seqmapping()
     eval_generated_odom(args, seqmap, oval_entries)
