@@ -228,7 +228,6 @@ class KITTI_eigen(data.Dataset):
             if mdPred_root is not None:
                 mdDepthpath = os.path.join(mdPred_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
                 if not os.path.exists(mdDepthpath):
-                    continue
                     raise Exception("Prediction file %s missing" % mdDepthpath)
                 self.mdDepthpath_list.append(mdDepthpath)
 

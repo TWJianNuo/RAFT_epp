@@ -84,19 +84,21 @@ def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
     return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
 
 class KITTI_eigen(data.Dataset):
-    def __init__(self, entries, root='datasets/KITTI', odom_root=None, ins_root=None, flowPred_root=None, mdPred_root=None):
+    def __init__(self, entries, root='datasets/KITTI', odom_root=None, ins_root=None, flowPred_root=None, mdPred_root=None, bsposepred_root=None):
         super(KITTI_eigen, self).__init__()
         self.root = root
         self.odom_root = odom_root
         self.flowPred_root = flowPred_root
         self.mdPred_root = mdPred_root
         self.ins_root = ins_root
+        self.bsposepred_root = bsposepred_root
 
         self.image_list = list()
         self.intrinsic_list = list()
         self.inspred_list = list()
         self.flowPred_list = list()
         self.mdPred_list = list()
+        self.bsposepath_list = list()
 
         self.entries = list()
 
@@ -112,8 +114,11 @@ class KITTI_eigen(data.Dataset):
             img1path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))
             img2path = os.path.join(tmproot, seq, 'image_02', 'data', "{}.png".format(str(index + 1).zfill(10)))
 
-            mdDepth_path = os.path.join(self.mdPred_root, seq, 'image_02', "{}.png".format(str(index + 1).zfill(10)))
-            flowpred_path = os.path.join(self.flowPred_root, seq, 'image_02', "{}.png".format(str(index + 1).zfill(10)))
+            mdDepth_path = os.path.join(self.mdPred_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
+            if not os.path.exists(mdDepth_path):
+                raise Exception("mD pred file %s missing" % mdDepth_path)
+
+            flowpred_path = os.path.join(self.flowPred_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
 
             # Load Intrinsic for each frame
             calib_dir = os.path.join(tmproot, seq.split('/')[0])
@@ -133,6 +138,11 @@ class KITTI_eigen(data.Dataset):
                 self.image_list.append([img1path, img1path])
             else:
                 self.image_list.append([img1path, img2path])
+
+            pose_bs_path = os.path.join(self.bsposepred_root, seq, 'image_02/posepred', "{}.pickle".format(str(index).zfill(10)))
+            if not os.path.exists(pose_bs_path):
+                raise Exception("prediction file %s missing" % pose_bs_path)
+            self.bsposepath_list.append(pose_bs_path)
 
             self.intrinsic_list.append(intrinsic)
             self.entries.append(entry)
@@ -164,17 +174,20 @@ class KITTI_eigen(data.Dataset):
         else:
             inspred = None
 
+        posepred_bs = pickle.load(open(self.bsposepath_list[index], "rb"))
+
         mdDepth = np.array(Image.open(self.mdPred_list[index])).astype(np.float32) / 256.0
         flowpred_RAFT, valid_flow = readFlowKITTI(self.flowPred_list[index])
-        data_blob = self.wrapup(img1=img1, img2=img2, intrinsic=intrinsic, insmap=inspred, mdDepth=mdDepth, flowpred_RAFT=flowpred_RAFT, tag=self.entries[index])
+        data_blob = self.wrapup(img1=img1, img2=img2, intrinsic=intrinsic, insmap=inspred, mdDepth=mdDepth, flowpred_RAFT=flowpred_RAFT, posepred_bs=posepred_bs, tag=self.entries[index])
         return data_blob
 
-    def wrapup(self, img1, img2, intrinsic, insmap, mdDepth, flowpred_RAFT, tag):
+    def wrapup(self, img1, img2, intrinsic, insmap, mdDepth, flowpred_RAFT, posepred_bs, tag):
         img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
         intrinsic = torch.from_numpy(intrinsic).float()
         mdDepth = torch.from_numpy(mdDepth).unsqueeze(0)
         flowpred_RAFT = torch.from_numpy(flowpred_RAFT).permute([2, 0, 1]).float()
+        posepred_bs = torch.from_numpy(posepred_bs).float()
 
         data_blob = dict()
         data_blob['img1'] = img1
@@ -182,7 +195,9 @@ class KITTI_eigen(data.Dataset):
         data_blob['intrinsic'] = intrinsic
         data_blob['mdDepth'] = mdDepth
         data_blob['flowpred_RAFT'] = flowpred_RAFT
+        data_blob['posepred_bs'] = posepred_bs
         data_blob['tag'] = tag
+
         if insmap is not None:
             insmap = torch.from_numpy(insmap).unsqueeze(0).int()
             data_blob['insmap'] = insmap
@@ -274,7 +289,6 @@ def depth2scale(pts2d1, pts2d2, intrinsic, R, t, coorespondedDepth):
     M = intrinsic33 @ R @ np.linalg.inv(intrinsic33)
     delta_t = (intrinsic33 @ t).squeeze()
     minval = 1e-6
-
 
     denom = (pts2d2[0, :] * (np.expand_dims(M[2, :], axis=0) @ pts2d1).squeeze() - (np.expand_dims(M[0, :], axis=0) @ pts2d1).squeeze()) ** 2 + \
             (pts2d2[1, :] * (np.expand_dims(M[2, :], axis=0) @ pts2d1).squeeze() - (np.expand_dims(M[1, :], axis=0) @ pts2d1).squeeze()) ** 2
@@ -466,26 +480,49 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
     else:
         gradComputer = GradComputer()
 
-    exportfold = args.export_root
-    os.makedirs(exportfold, exist_ok=True)
-
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         insmap = data_blob['insmap']
         intrinsic = data_blob['intrinsic']
         flowpred = data_blob['flowpred_RAFT']
         mdDepth_pred = data_blob['mdDepth']
-        tag = data_blob['tag']
+        pose_bs = data_blob['posepred_bs']
+        tag = data_blob['tag'][0]
 
-        R, t, scale, flow_sel_mag = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(val_id + 10), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
+        if torch.sum(torch.abs(data_blob['img1'] - data_blob['img2'])) < 1:
+            R = np.eye(3)
+            t = np.array([[0, 0, -1]]).T
+            scale = 0
+        else:
+            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(val_id + 10), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
+        self_pose = np.eye(4)
+        self_pose[0:3, 0:3] = R
+        self_pose[0:3, 3:4] = t * scale
 
-        export_dict = {'R': R, 't': t, 'flow_sel_mag': flow_sel_mag.item(), 'scale': scale}
-        frameidx = int(tag[0].split(' ')[1])
-        exportfold2 = os.path.join(exportfold, tag[0].split(' ')[0], 'image_02')
-        os.makedirs(exportfold2, exist_ok=True)
-        export_root = os.path.join(exportfold2, str(frameidx).zfill(10) + '.pickle')
+        pose_bs_np = pose_bs[0].cpu().numpy()
+        pose_bs_np = self_pose @ np.linalg.inv(pose_bs_np[0]) @ pose_bs_np
+
+        seq, frmidx = tag.split(' ')
+        exportfold = os.path.join(args.export_root, seq, 'image_02')
+        os.makedirs(exportfold, exist_ok=True)
+        export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
         with open(export_root, 'wb') as handle:
-            pickle.dump(export_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+def get_odomentries(args):
+    import glob
+    odomentries = list()
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_09_30/2011_09_30_drive_0016_sync',
+        '2011_09_30/2011_09_30_drive_0018_sync',
+        '2011_09_30/2011_09_30_drive_0027_sync'
+    ]
+    for odomseq in odomseqs:
+        leftimgs = glob.glob(os.path.join(args.odom_root, odomseq, 'image_02/data', "*.png"))
+        for leftimg in leftimgs:
+            imgname = os.path.basename(leftimg)
+            odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
+    return odomentries
 
 def generate_seqmapping():
     seqmapping = \
@@ -509,22 +546,6 @@ def generate_seqmapping():
 
     return seqmap, entries
 
-def get_odomentries(args):
-    import glob
-    odomentries = list()
-    odomseqs = [
-        '2011_10_03/2011_10_03_drive_0027_sync',
-        '2011_09_30/2011_09_30_drive_0016_sync',
-        '2011_09_30/2011_09_30_drive_0018_sync',
-        '2011_09_30/2011_09_30_drive_0027_sync'
-    ]
-    for odomseq in odomseqs:
-        leftimgs = glob.glob(os.path.join(args.odom_root, odomseq, 'image_02/data', "*.png"))
-        for leftimg in leftimgs:
-            imgname = os.path.basename(leftimg)
-            odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
-    return odomentries
-
 def read_splits(args):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
@@ -539,24 +560,95 @@ def read_splits(args):
         else:
             return train_entries + evaluation_entries + odom_entries
 
-def train(args):
-    entries = read_splits(args)
-    eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries,  flowPred_root=args.flowPred_root, mdPred_root=args.mdPred_root, ins_root=args.ins_root)
+def train(processid, args, entries):
+    interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
+    if processid == args.nprocs - 1:
+        stidx = int(interval * processid)
+        edidx = len(entries)
+    else:
+        stidx = int(interval * processid)
+        edidx = int(interval * (processid + 1))
+
+    eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root,
+                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=args.num_workers, drop_last=False, shuffle=False)
-
-    print("Test splits contain %d images" % (eval_dataset.__len__()))
-
+    print("Initial subprocess, from %d to %d, total %d" % (stidx, edidx, len(entries)))
     validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum)
     return
+
+def eval_generated_odom(args, seqmap, entries):
+    accumerr = dict()
+    pos_recs = dict()
+    for val_id, entry in enumerate(tqdm(entries)):
+        # Read Pose gt
+        seq, frameidx, _ = entry.split(' ')
+        seq = seq.split('/')[1]
+        if seq not in accumerr.keys():
+            accumerr[seq] = {'pose_RANSAC': list()}
+            accumpos = {'pose_RANSAC': np.array([[0, 0, 0, 1]]).T, 'pose_gt': np.array([[0, 0, 0, 1]]).T}
+            pos_recs[seq] = {'pose_RANSAC': list(), 'pose_gt': list()}
+
+        frameidx = int(frameidx)
+        gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[seq[0:21]]['mapid']).zfill(2))))
+        if frameidx - int(seqmap[seq[0:21]]['stid']) < 0 or \
+                frameidx + 1 - int(seqmap[seq[0:21]]['stid']) < 0 or \
+                frameidx - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse) or \
+                frameidx + 1 - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse):
+            continue
+        gtposes_str = [gtposes_sourse[frameidx - int(seqmap[seq[0:21]]['stid'])],
+                       gtposes_sourse[frameidx + 1 - int(seqmap[seq[0:21]]['stid'])]]
+        gtposes = list()
+        for gtposestr in gtposes_str:
+            gtpose = np.eye(4).flatten()
+            for numstridx, numstr in enumerate(gtposestr.split(' ')):
+                gtpose[numstridx] = float(numstr)
+            gtpose = np.reshape(gtpose, [4, 4])
+            gtposes.append(gtpose)
+        posegt = np.linalg.inv(gtposes[1]) @ gtposes[0]
+
+        poses = dict()
+        pose_RANSAC_path = os.path.join(args.export_root, entry.split(' ')[0], 'image_02', str(frameidx).zfill(10) + '.pickle')
+        pose_RANSAC = pickle.load(open(pose_RANSAC_path, "rb"))
+        poses['pose_gt'] = posegt
+        poses['pose_RANSAC'] = pose_RANSAC[0]
+
+        # Update Pose
+        for k in accumpos.keys():
+            accumpos[k] = poses[k] @ accumpos[k]
+            pos_recs[seq][k].append(accumpos[k])
+
+        for k in accumerr[seq].keys():
+            loss_pos = np.sqrt(np.sum((accumpos[k] - accumpos['pose_gt']) ** 2))
+            accumerr[seq][k].append(loss_pos.item())
+
+    accumerr_fin = dict()
+    for k in accumerr.keys():
+        accumerr_fin[k] = dict()
+        for kk in accumerr[k].keys():
+            accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
+
+    weighted_err_dict = dict()
+    for k in accumerr[seq].keys():
+        totframe = 0
+        for s in accumerr_fin.keys():
+            totframe += len(accumerr[s][k])
+
+        weighted_err = 0
+        for s in accumerr_fin.keys():
+            weighted_err += len(accumerr[s][k]) / totframe * accumerr_fin[s][k]
+
+        weighted_err_dict[k] = weighted_err
+
+    for k in weighted_err_dict.keys():
+        print("%s : %f" % (k.ljust(50), weighted_err_dict[k]))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--odom_root', type=str)
-    parser.add_argument('--depth_root', type=str)
-    parser.add_argument('--depthvlsgt_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
+    parser.add_argument('--bsposepred_root', type=str)
     parser.add_argument('--flowPred_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--export_root', type=str)
@@ -566,11 +658,15 @@ if __name__ == '__main__':
     parser.add_argument('--only_eval', action='store_true')
     parser.add_argument('--ban_odometry', action='store_true')
     parser.add_argument('--samplenum', type=int, default=50000)
-
-
+    parser.add_argument('--nprocs', type=int, default=6)
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
+    entries = read_splits(args)
+    mp.spawn(train, nprocs=args.nprocs, args=(args, entries))
     train(args)
+
+    seqmap, oval_entries = generate_seqmapping()
+    eval_generated_odom(args, seqmap, oval_entries)
