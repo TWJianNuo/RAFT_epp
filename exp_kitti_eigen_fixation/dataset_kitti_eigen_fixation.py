@@ -168,7 +168,7 @@ def read_deepv2d_pose(deepv2dpose_path):
 
 class KITTI_eigen(data.Dataset):
     def __init__(self, entries, inheight, inwidth, maxinsnum, root, ins_root, depth_root, depthvls_root, mdPred_root=None,
-                 prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False, deepv2dpred_root=None, flowPred_root=None):
+                 prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False, deepv2dpred_root=None, flowPred_root=None, RANSACPose_root=None):
         super(KITTI_eigen, self).__init__()
         self.istrain = istrain
         self.isgarg = isgarg
@@ -181,6 +181,7 @@ class KITTI_eigen(data.Dataset):
         self.prediction_root = prediction_root
         self.deepv2dpred_root = deepv2dpred_root
         self.flowPred_root = flowPred_root
+        self.RANSACPose_root = RANSACPose_root
         self.ins_root = ins_root
         self.inheight = inheight
         self.inwidth = inwidth
@@ -201,6 +202,7 @@ class KITTI_eigen(data.Dataset):
         self.deepv2dpredpath_list = list()
         self.deepv2dpredpose_list = list()
         self.flowpredpath_list = list()
+        self.RANSACPose_list = list()
 
         self.entries = list()
 
@@ -251,6 +253,12 @@ class KITTI_eigen(data.Dataset):
                     raise Exception("prediction file %s missing" % predDepthpath)
                 self.predDepthpath_list.append(predDepthpath)
                 self.predPosepath_list.append(predPosepath)
+
+            if RANSACPose_root is not None:
+                RANSACPose_path = os.path.join(RANSACPose_root, seq, 'image_02', "{}.pickle".format(str(index).zfill(10)))
+                if not os.path.exists(RANSACPose_path):
+                    raise Exception("RANSAC Pose file %s missing" % RANSACPose_path)
+                self.RANSACPose_list.append(RANSACPose_path)
 
             if flowPred_root is not None:
                 flowPred_path = os.path.join(flowPred_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
@@ -309,12 +317,20 @@ class KITTI_eigen(data.Dataset):
         rel_pose = copy.deepcopy(self.pose_list[index])
         inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
 
+
         if self.prediction_root is not None:
-            posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
             depthpred = np.array(Image.open(self.predDepthpath_list[index])).astype(np.float32) / 256.0
         else:
-            posepred = None
             depthpred = None
+
+        assert not(self.prediction_root is not None and self.RANSACPose_root is not None)
+        if self.prediction_root is not None:
+            posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
+        elif self.RANSACPose_root is not None:
+            posepred = pickle.load(open(self.RANSACPose_list[index], "rb"))
+        else:
+            posepred = None
+
         inspred, posepred = self.pad_clip_ins(insmap=inspred, posepred=posepred)
 
         if not hasattr(self, 'deepv2dpred_root'):

@@ -503,11 +503,40 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         pose_bs_np[0] = self_pose
 
         seq, frmidx = tag.split(' ')
-        exportfold = os.path.join(args.export_root, seq, 'image_02')
+        exportfold = os.path.join(args.vls_root, seq, 'image_02')
+
+        insmap_np = data_blob['insmap'].squeeze().numpy()
+        xx, yy = np.meshgrid(range(insmap_np.shape[1]), range(insmap_np.shape[0]), indexing='xy')
+        fig, ax = plt.subplots(figsize=(16,9))
+        ax.imshow(vls_ins(np.array(tensor2rgb(data_blob['img1'], viewind=0)), insmap_np))
+        for k in np.unique(insmap_np):
+            if k == 0:
+                 continue
+            xxf = xx[insmap_np == k]
+            yyf = yy[insmap_np == k]
+
+            xmin = xxf.min()
+            xmax = xxf.max()
+            ymin = yyf.min()
+            ymax = yyf.max()
+
+            if (ymax - ymin) * (xmax - xmin) < 1000:
+                continue
+
+            rect = patches.Rectangle((xmin, ymax), xmax - xmin, ymin - ymax, linewidth=1, facecolor='none', edgecolor='r')
+            ax.add_patch(rect)
+
+            ins_relpose = pose_bs[0, k].cpu().numpy() @ np.linalg.inv(pose_bs[0, 0].cpu().numpy())
+            mvdist = np.sqrt(np.sum(ins_relpose[0:3, 3:4] ** 2))
+            mvdist_transed = np.sqrt(np.sum((pose_bs_np[k] @ np.linalg.inv(pose_bs_np[0]))[0:3, 3:4] ** 2))
+            assert np.abs(mvdist_transed - mvdist) < 1e-3
+            ax.text(xmin + 5, ymin + 10, '%.3f' % mvdist, fontsize=6, c='r', weight='bold')
+
+        plt.axis('off')
         os.makedirs(exportfold, exist_ok=True)
-        export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
-        with open(export_root, 'wb') as handle:
-            pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        plt.savefig(os.path.join(exportfold, "{}.png".format(frmidx)), bbox_inches='tight', pad_inches=0)
+        plt.close()
+
 
 def get_odomentries(args):
     import glob
@@ -652,7 +681,7 @@ if __name__ == '__main__':
     parser.add_argument('--bsposepred_root', type=str)
     parser.add_argument('--flowPred_root', type=str)
     parser.add_argument('--ins_root', type=str)
-    parser.add_argument('--export_root', type=str)
+    parser.add_argument('--vls_root', type=str)
     parser.add_argument('--num_workers', type=int, default=6)
     parser.add_argument('--banins', action='store_true')
     parser.add_argument('--bangrad', action='store_true')
@@ -667,6 +696,3 @@ if __name__ == '__main__':
 
     entries = read_splits(args)
     mp.spawn(train, nprocs=args.nprocs, args=(args, entries))
-
-    seqmap, oval_entries = generate_seqmapping()
-    eval_generated_odom(args, seqmap, oval_entries)
