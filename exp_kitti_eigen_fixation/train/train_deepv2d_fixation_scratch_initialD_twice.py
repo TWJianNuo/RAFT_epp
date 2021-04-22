@@ -378,12 +378,13 @@ def train(gpu, ngpus_per_node, args):
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
                                 depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
-                                istrain=True, muteaug=False, banremovedup=False, isgarg=False)
+                                RANSACPose_root=args.RANSACPose_root, istrain=True, muteaug=False, banremovedup=False, isgarg=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
-                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root, istrain=False, isgarg=True)
+                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
@@ -533,6 +534,7 @@ if __name__ == '__main__':
     parser.add_argument('--depth_root', type=str)
     parser.add_argument('--depthvlsgt_root', type=str)
     parser.add_argument('--prediction_root', type=str)
+    parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)

@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import torch
@@ -112,6 +113,9 @@ class Logger:
         X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], data_blob['flowgt_vls'], data_blob['insmap'], outputs)
         self.writer.add_image('X', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
 
+        X = self.vls_objmvment(np.array(insvls), data_blob['insmap'], data_blob['posepred'])
+        self.writer.add_image('objmvment', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
+
     def vls_sampling(self, img1, img2, depthgt, flowmap, insmap, outputs):
         depthgtnp = depthgt[0].squeeze().cpu().numpy()
         insmapnp = insmap[0].squeeze().cpu().numpy()
@@ -189,6 +193,41 @@ class Logger:
         plt.title("Sampling Arae")
 
         fig.tight_layout()  # Or equivalently,  "plt.tight_layout()"
+        canvas.draw()
+        buf = canvas.buffer_rgba()
+        plt.close()
+        X = np.asarray(buf)
+        return X
+
+    def vls_objmvment(self, img1, insmap, posepred):
+        insmap_np = insmap[0].squeeze().cpu().numpy()
+        posepred_np = posepred[0].cpu().numpy()
+        xx, yy = np.meshgrid(range(insmap_np.shape[1]), range(insmap_np.shape[0]), indexing='xy')
+        fig, ax = plt.subplots(figsize=(16,9))
+        canvas = FigureCanvasAgg(fig)
+        ax.imshow(img1)
+        for k in np.unique(insmap_np):
+            if k == 0:
+                 continue
+            xxf = xx[insmap_np == k]
+            yyf = yy[insmap_np == k]
+
+            xmin = xxf.min()
+            xmax = xxf.max()
+            ymin = yyf.min()
+            ymax = yyf.max()
+
+            if (ymax - ymin) * (xmax - xmin) < 1000:
+                continue
+
+            rect = patches.Rectangle((xmin, ymax), xmax - xmin, ymin - ymax, linewidth=1, facecolor='none', edgecolor='r')
+            ax.add_patch(rect)
+
+            ins_relpose = posepred_np[k] @ np.linalg.inv(posepred_np[0])
+            mvdist = np.sqrt(np.sum(ins_relpose[0:3, 3:4] ** 2))
+            ax.text(xmin + 5, ymin + 10, '%.3f' % mvdist, fontsize=6, c='r', weight='bold')
+
+        plt.axis('off')
         canvas.draw()
         buf = canvas.buffer_rgba()
         plt.close()
