@@ -37,6 +37,8 @@ from torchvision.transforms import ColorJitter
 from core.utils import frame_utils
 import copy
 from tqdm import tqdm
+import glob
+import time
 
 def read_calib_file(path):
     """Read KITTI calibration file
@@ -499,19 +501,40 @@ def generate_seqmapping():
 
     return seqmap, entries
 
-def read_splits(args):
+def read_splits(args, it):
+    split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
+    odom_entries = get_odomentries(args)
+    if it > 0:
+        return train_entries
+    else:
+        return train_entries + evaluation_entries + odom_entries
+
+def read_splits(args, it):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    if args.only_eval:
-        return evaluation_entries
+    if it == 0:
+        entries = train_entries
+        folds = list()
+        for entry in entries:
+            seq, idx, _ = entry.split(' ')
+            folds.append(seq)
+        folds = list(set(folds))
+
+        entries_expand = list()
+        for fold in folds:
+            pngs = glob.glob(os.path.join(args.dataset, fold, 'image_02/data/*.png'))
+            for png in pngs:
+                frmidx = png.split('/')[-1].split('.')[0]
+                entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
+                entries_expand.append(entry_expand)
+        return odom_entries + entries_expand + evaluation_entries
     else:
-        if args.ban_odometry:
-            return train_entries + evaluation_entries
-        else:
-            return train_entries + evaluation_entries + odom_entries
+        return train_entries
 
 def train(processid, args, entries, iters=0):
     interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
@@ -613,15 +636,27 @@ if __name__ == '__main__':
     parser.add_argument('--samplenum', type=int, default=50000)
     parser.add_argument('--nprocs', type=int, default=6)
     parser.add_argument('--serverid', type=int, default=0)
+    parser.add_argument('--export_first_it', action='store_true')
+    parser.add_argument('--delay', type=int, default=0)
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    for k in range(64):
+    time.sleep(args.delay)
+    if args.export_first_it:
+        k = 0
         print("Start Iteration %d" % (k))
-        entries = read_splits(args)
+        entries = read_splits(args, it=k)
         mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
 
         seqmap, oval_entries = generate_seqmapping()
         eval_generated_odom(args, seqmap, oval_entries, k)
+    else:
+        for k in range(1, 64):
+            print("Start Iteration %d" % (k))
+            entries = read_splits(args, it=k)
+            mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+
+            seqmap, oval_entries = generate_seqmapping()
+            eval_generated_odom(args, seqmap, oval_entries, k)
