@@ -1,4 +1,7 @@
 from __future__ import print_function, division
+import warnings
+warnings.filterwarnings("ignore")
+
 import os, sys
 project_rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.insert(0, project_rootdir)
