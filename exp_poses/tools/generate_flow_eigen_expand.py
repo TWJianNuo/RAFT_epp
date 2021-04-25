@@ -43,7 +43,7 @@ def read_splits(args):
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    entries = train_entries + evaluation_entries
+    entries = train_entries
     folds = list()
     for entry in entries:
         seq, idx, _ = entry.split(' ')
@@ -57,7 +57,7 @@ def read_splits(args):
             frmidx = png.split('/')[-1].split('.')[0]
             entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
             entries_expand.append(entry_expand)
-    return odom_entries + entries_expand
+    return odom_entries + entries_expand + evaluation_entries
 
 def remove_dup(entries):
     dupentry = list()
