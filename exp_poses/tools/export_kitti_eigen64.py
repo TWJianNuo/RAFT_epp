@@ -142,8 +142,9 @@ class KITTI_eigen(data.Dataset):
 
             pose_bs_path = os.path.join(self.bsposepred_root, seq, 'image_02/posepred', "{}.pickle".format(str(index).zfill(10)))
             if not os.path.exists(pose_bs_path):
-                raise Exception("prediction file %s missing" % pose_bs_path)
-            self.bsposepath_list.append(pose_bs_path)
+                self.bsposepath_list.append('')
+            else:
+                self.bsposepath_list.append(pose_bs_path)
 
             self.intrinsic_list.append(intrinsic)
             self.entries.append(entry)
@@ -175,7 +176,12 @@ class KITTI_eigen(data.Dataset):
         else:
             inspred = None
 
-        posepred_bs = pickle.load(open(self.bsposepath_list[index], "rb"))
+        if len(self.bsposepath_list[index]) == 0:
+            posepred_bs = np.eye(4)
+            posepred_bs = np.expand_dims(posepred_bs, axis=0)
+            posepred_bs = np.repeat(posepred_bs, axis=0, repeats=int(inspred.max()))
+        else:
+            posepred_bs = pickle.load(open(self.bsposepath_list[index], "rb"))
 
         mdDepth = np.array(Image.open(self.mdPred_list[index])).astype(np.float32) / 256.0
         flowpred_RAFT, valid_flow = readFlowKITTI(self.flowPred_list[index])
@@ -649,9 +655,6 @@ if __name__ == '__main__':
         print("Start Iteration %d" % (k))
         entries = read_splits(args, it=k)
         mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
-
-        seqmap, oval_entries = generate_seqmapping()
-        eval_generated_odom(args, seqmap, oval_entries, k)
     else:
         for k in range(1, 64):
             print("Start Iteration %d" % (k))
