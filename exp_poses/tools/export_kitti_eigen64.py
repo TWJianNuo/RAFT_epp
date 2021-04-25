@@ -9,10 +9,6 @@ import os
 import cv2
 import time
 import numpy as np
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pickle
 from core.utils.frame_utils import readFlowKITTI
 
@@ -207,53 +203,6 @@ class KITTI_eigen(data.Dataset):
     def __len__(self):
         return len(self.entries)
 
-def vls_flows(image1, image2, flow_anno, flow_depth, depth, insmap):
-    image1np = image1[0].cpu().permute([1, 2, 0]).numpy().astype(np.uint8)
-    image2np = image2[0].cpu().permute([1, 2, 0]).numpy().astype(np.uint8)
-    depthnp = depth[0].cpu().squeeze().numpy()
-    flow_anno_np = flow_anno[0].cpu().numpy()
-    flow_depth_np = flow_depth[0].cpu().numpy()
-    insmap_np = insmap[0].cpu().squeeze().numpy()
-
-    # tensor2disp(depth > 0, vmax=1, viewind=0).show()
-    # tensor2disp(flow_anno[:, 1:2, :, :] != 0, vmax=1, viewind=0).show()
-
-    h, w, _ = image1np.shape
-    xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
-    selector_anno = (flow_anno_np[0, :, :] != 0) * (depthnp > 0) * (insmap_np == 0)
-
-    flowx = flow_anno_np[0][selector_anno]
-    flowy = flow_anno_np[1][selector_anno]
-
-    xxf = xx[selector_anno]
-    yyf = yy[selector_anno]
-    df = depthnp[selector_anno]
-
-    cm = plt.get_cmap('magma')
-    rndcolor = cm(1 / df / 0.15)[:, 0:3]
-
-    selector_depth = (flow_depth_np[0, :, :] != 0) * (depthnp > 0) * (insmap_np == 0)
-    flowx_depth = flow_depth_np[0][selector_depth]
-    flowy_depth = flow_depth_np[1][selector_depth]
-
-    xxf_depth = xx[selector_depth]
-    yyf_depth = yy[selector_depth]
-    df_depth = depthnp[selector_depth]
-    rndcolor_depth = cm(1 / df_depth / 0.15)[:, 0:3]
-
-    fig = plt.figure(figsize=(16, 9))
-    fig.add_subplot(3, 1, 1)
-    plt.scatter(xxf, yyf, 3, rndcolor)
-    plt.imshow(image1np)
-
-    fig.add_subplot(3, 1, 2)
-    plt.scatter(xxf + flowx, yyf + flowy, 3, rndcolor)
-    plt.imshow(image2np)
-
-    fig.add_subplot(3, 1, 3)
-    plt.scatter(xxf_depth + flowx_depth, yyf_depth + flowy_depth, 3, rndcolor_depth)
-    plt.imshow(image2np)
-    plt.show()
 
 def depth2flow(depth, valid, intrinsic, rel_pose):
     device = depth.device
