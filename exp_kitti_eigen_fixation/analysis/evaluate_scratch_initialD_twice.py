@@ -22,7 +22,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scale_initialD import EppFlowNet
+from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scale_initialD_twice import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -88,7 +88,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
 
         if not isdeepv2d:
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
-            predread = outputs[('depth', 2)]
+            predread = outputs[('depth', 4)]
         else:
             predread = depthpred_deepv2d
         selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * depthpred_deepv2d > 0).float()
@@ -221,11 +221,11 @@ if __name__ == '__main__':
     parser.add_argument('--depthvlsgt_root', type=str)
     parser.add_argument('--prediction_root', type=str, default=None)
     parser.add_argument('--deepv2dpred_root', type=str)
+    parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--initbymD', action='store_true')
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
-    parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
     parser.add_argument('--distributed', default=True, type=bool)

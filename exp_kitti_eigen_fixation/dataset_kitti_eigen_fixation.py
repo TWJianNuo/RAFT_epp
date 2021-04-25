@@ -271,7 +271,7 @@ class KITTI_eigen(data.Dataset):
                 self.pose_list.append(np.eye(4))
             else:
                 self.image_list.append([img1path, img2path])
-                self.pose_list.append(get_pose(root, seq, index, extrinsic))
+                self.pose_list.append(get_pose(root, seq, int(index), extrinsic))
 
             self.intrinsic_list.append(intrinsic)
             self.entries.append(entry)

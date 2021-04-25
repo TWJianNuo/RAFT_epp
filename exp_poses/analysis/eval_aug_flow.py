@@ -446,7 +446,6 @@ def read_splits_mapping():
         evaluation_entries.append("{} {} {}".format(seqname, "10".zfill(10), 'l'))
     return evaluation_entries
 
-
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
     args.gpu = gpu

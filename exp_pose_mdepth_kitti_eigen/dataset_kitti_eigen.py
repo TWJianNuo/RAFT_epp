@@ -193,7 +193,6 @@ class KITTI_eigen(data.Dataset):
             if not os.path.exists(img2path):
                 self.image_list.append([img1path, img1path])
                 self.pose_list.append(np.eye(4))
-
             else:
                 self.image_list.append([img1path, img2path])
                 self.pose_list.append(get_pose(root, seq, index, extrinsic))
