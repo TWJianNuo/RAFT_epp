@@ -592,7 +592,7 @@ def eval_generated_odom(args, seqmap, entries, repeats=64):
         pose_RANSAC_path = os.path.join(args.export_root, str(repeats).zfill(3), entry.split(' ')[0], 'image_02', str(frameidx).zfill(10) + '.pickle')
         pose_RANSAC = pickle.load(open(pose_RANSAC_path, "rb"))
         poses['pose_gt'] = posegt
-        poses['pose_RANSAC'] = pose_RANSAC[k][0]
+        poses['pose_RANSAC'] = pose_RANSAC[0]
 
         # Update Pose
         for k in accumpos.keys():
@@ -645,22 +645,29 @@ if __name__ == '__main__':
     parser.add_argument('--export_first_it', action='store_true')
     parser.add_argument('--delay', type=int, default=0)
     parser.add_argument('--stid', type=int, default=1)
+    parser.add_argument('--evalonly', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
     time.sleep(args.delay)
-    if args.export_first_it:
-        k = 0
-        print("Start Iteration %d" % (k))
-        entries = read_splits(args, it=k)
-        mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
 
+    if args.evalonly:
+        k = 0
         seqmap, oval_entries = generate_seqmapping()
         eval_generated_odom(args, seqmap, oval_entries, k)
     else:
-        for k in range(args.stid, 64):
+        if args.export_first_it:
+            k = 0
             print("Start Iteration %d" % (k))
             entries = read_splits(args, it=k)
             mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+
+            seqmap, oval_entries = generate_seqmapping()
+            eval_generated_odom(args, seqmap, oval_entries, k)
+        else:
+            for k in range(args.stid, 64):
+                print("Start Iteration %d" % (k))
+                entries = read_splits(args, it=k)
+                mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
