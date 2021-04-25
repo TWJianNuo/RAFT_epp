@@ -179,7 +179,7 @@ class KITTI_eigen(data.Dataset):
         if len(self.bsposepath_list[index]) == 0:
             posepred_bs = np.eye(4)
             posepred_bs = np.expand_dims(posepred_bs, axis=0)
-            posepred_bs = np.repeat(posepred_bs, axis=0, repeats=int(inspred.max()))
+            posepred_bs = np.repeat(posepred_bs, axis=0, repeats=int(inspred.max() + 1))
         else:
             posepred_bs = pickle.load(open(self.bsposepath_list[index], "rb"))
 
