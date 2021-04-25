@@ -533,7 +533,7 @@ def read_splits(args, it):
 
         entries_expand = list()
         for fold in folds:
-            pngs = glob.glob(os.path.join(args.dataset, fold, 'image_02/data/*.png'))
+            pngs = glob.glob(os.path.join(args.dataset_root, fold, 'image_02/data/*.png'))
             for png in pngs:
                 frmidx = png.split('/')[-1].split('.')[0]
                 entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
