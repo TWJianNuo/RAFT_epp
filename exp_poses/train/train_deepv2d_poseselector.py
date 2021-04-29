@@ -253,7 +253,6 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=F
         intrinsic = data_blob['intrinsic'].cuda(gpu)
         insmap = data_blob['insmap'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
-        depthgt = data_blob['depthmap'].cuda(gpu)
         mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
         ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
         scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
