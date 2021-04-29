@@ -463,6 +463,8 @@ def train(gpu, ngpus_per_node, args):
 
             if args.enable_seqloss:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 + seqloss
+            elif args.enable_scalelossonly:
+                loss = scaleloss
             else:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 + scaleloss
 
