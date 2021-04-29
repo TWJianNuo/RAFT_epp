@@ -373,7 +373,10 @@ class KITTI_odom(data.Dataset):
 
         if self.RANSACPose_root is not None:
             np.random.seed(index + int(time.time()))
-            rep_idces = [0, 1, 2, 3]
+            if self.num_samples == 1:
+                rep_idces = [0]
+            else:
+                rep_idces = [0, 1, 2, 3]
             # rep_idces = [0, 0, 0, 0]
             posepred = list()
 

@@ -471,9 +471,7 @@ def get_imu_coord(root, seq, index):
     t1 = np.array([mx, my, nums[2]])
     return t1
 
-def get_reldepth_binrange(depthnp_relfs):
-    binnum = 8
-
+def get_reldepth_binrange(depthnp_relfs, binnum=8):
     manual_l = -0.39772
     mannual_r = 0.245844
 
@@ -495,6 +493,7 @@ if __name__ == '__main__':
     parser.add_argument('--RANSAC_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--vlsroot', type=str)
+    parser.add_argument('--binnum', type=int, default=8)
     args = parser.parse_args()
 
     torch.manual_seed(1234)
@@ -556,7 +555,7 @@ if __name__ == '__main__':
         plt.close()
 
         if rp.split('/')[-1] == '000':
-            sampled_depth = get_reldepth_binrange(diff)
+            sampled_depth = get_reldepth_binrange(diff, binnum=args.binnum)
             fig = plt.figure()
             plt.hist(diff, bins=200, range=(-3, 3))
             plt.vlines(sampled_depth, ymin=-100, ymax=100)
@@ -564,6 +563,6 @@ if __name__ == '__main__':
             plt.close()
 
             import pickle
-            pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/exp_poses/eppflownet/pose_bin8.pickle", "wb"))
+            pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/exp_poses/eppflownet/pose_bin{}.pickle".format(args.binnum), "wb"))
 
 

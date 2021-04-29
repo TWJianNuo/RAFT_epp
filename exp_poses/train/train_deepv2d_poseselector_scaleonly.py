@@ -25,7 +25,7 @@ import time
 from torch.utils.data import DataLoader
 from exp_poses.dataset_kitti_eigen_poseselector import KITTI_eigen
 from exp_poses.dataset_kitti_odom_poseselector import KITTI_odom
-from exp_poses.eppflownet.EppFlowNet_poseselector import EppFlowNet
+from exp_poses.eppflownet.EppFlowNet_poseselector_scaleonly import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -304,35 +304,27 @@ def read_splits():
     return train_entries, evaluation_entries
 
 def get_reprojection_loss(img1, outputs, ssim, args):
-    rpjloss_cale = 0
-    rpjloss_fin = 0
+    rpjloss = 0
     _, _, h, w = img1.shape
     selector = (outputs[('img1_recon', 2)][:, -1].sum(dim=1, keepdim=True) != 0).float()
     selector[:, :, 0:int(0.25810811 * h)] = 0
     for k in range(1, 3, 1):
-        img_recon_all = outputs[('img1_recon', k)]
-        img_recon_spe = torch.split(img_recon_all, dim=1, split_size_or_sections=1)
-        for m in range(len(img_recon_spe)):
-            # tensor2rgb(img_recon_spe[m].squeeze(1), viewind=0).show()
-            # tensor2disp(selector, viewind=0, vmax=1).show()
-            recimg = img_recon_spe[m].squeeze(1)
-            ssimloss = ssim(recimg, img1).mean(dim=1, keepdim=True)
-            l1_loss = torch.abs(recimg - img1).mean(dim=1, keepdim=True)
-            rpjloss_c = 0.85 * ssimloss + 0.15 * l1_loss
-            rpjloss_cm = (rpjloss_c * selector).sum() / (selector.sum() + 1)
-            if m == len(img_recon_spe) - 1:
-                rpjloss_fin += rpjloss_cm
-            else:
-                rpjloss_cale += rpjloss_cm
-    rpjloss_cale = rpjloss_cale / 2 / args.num_angs
-    rpjloss_fin = rpjloss_fin / 2
-    return rpjloss_cale, rpjloss_fin
+        recimg = outputs[('img1_recon', k)].squeeze(1)
+        # tensor2rgb(recimg, viewind=0).show()
+        # tensor2disp(selector, viewind=0, vmax=1).show()
+        ssimloss = ssim(recimg, img1).mean(dim=1, keepdim=True)
+        l1_loss = torch.abs(recimg - img1).mean(dim=1, keepdim=True)
+        rpjloss_c = 0.85 * ssimloss + 0.15 * l1_loss
+        rpjloss_cm = (rpjloss_c * selector).sum() / (selector.sum() + 1)
+        rpjloss += rpjloss_cm
+    rpjloss = rpjloss / 2
+    return rpjloss
 
 def get_scale_loss(outputs, gpsscale):
     scaleloss = 0
     for k in range(1, 3, 1):
         scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(1).expand([-1, 4]) - scale_pred[:, :, 0, 0]).mean()
+        scaleloss += torch.abs(gpsscale.unsqueeze(1) - scale_pred[:, :, 0, 0])
     scaleloss = scaleloss / 2
     return scaleloss
 
@@ -387,7 +379,7 @@ def train(gpu, ngpus_per_node, args):
         checkpoint = torch.load(args.restore_ckpt, map_location=loc)
         model.load_state_dict(checkpoint, strict=False)
 
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin8.pickle'), 'rb') as f:
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin32.pickle'), 'rb') as f:
         linlogdedge = pickle.load(f)
 
     model.train()
@@ -460,20 +452,20 @@ def train(gpu, ngpus_per_node, args):
 
             # tensor2disp(1/mD_pred_clipped, vmax=0.15, viewind=0).show()
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-            rpjloss_cale, rpjloss_fin = get_reprojection_loss(image1, outputs, ssim, args)
+            rpjloss = get_reprojection_loss(image1, outputs, ssim, args)
             scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
-            seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
+            # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
 
             if args.enable_seqloss:
-                loss = (rpjloss_cale + rpjloss_fin) / 2 + seqloss
+                # loss = rpjloss + seqloss
+                raise Exception("Not implement")
             elif args.enable_scalelossonly:
-                loss = (rpjloss_cale + rpjloss_fin) / 2 * 0 + scaleloss
+                loss = rpjloss * 0 + scaleloss
             else:
-                loss = (rpjloss_cale + rpjloss_fin) / 2 + scaleloss
+                loss = rpjloss + scaleloss
 
             metrics = dict()
-            metrics['rpjloss_cale'] = rpjloss_cale.item()
-            metrics['rpjloss_fin'] = rpjloss_fin.item()
+            metrics['rpjloss'] = rpjloss.item()
             metrics['scaleloss'] = scaleloss
             metrics['loss'] = loss
 
@@ -570,8 +562,8 @@ if __name__ == '__main__':
     parser.add_argument('--angy_range', type=float, default=0.06)
     parser.add_argument('--angz_range', type=float, default=0.01)
     parser.add_argument('--num_layers', type=int, default=50)
-    parser.add_argument('--num_scales', type=int, default=8)
-    parser.add_argument('--num_angs', type=int, default=4)
+    parser.add_argument('--num_scales', type=int, default=32)
+    parser.add_argument('--num_angs', type=int, default=1)
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)

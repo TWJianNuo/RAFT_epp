@@ -366,6 +366,7 @@ class KITTI_eigen(data.Dataset):
             np.random.seed(index + int(time.time()))
             rep_idces = np.random.choice(list(range(self.npossibility)), self.num_samples, replace=False)
             # rep_idces = np.array([0, 1, 2, 3])
+            # rep_idces = np.array([0])
             posepred = list()
 
             ang_decps_l = list()
