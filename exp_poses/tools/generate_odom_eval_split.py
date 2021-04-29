@@ -74,3 +74,25 @@ def read_splits(args, it):
         return odom_entries + entries_expand + evaluation_entries
     else:
         return train_entries
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args()
+    exp_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits', 'val_files_odom.txt')
+    seqmap, entries = generate_seqmapping()
+
+    entries = list(set(entries))
+    evalnum = 2000
+    import numpy as np
+    selected = np.random.choice(np.array(list(range(0, len(entries)))), evalnum, replace=False)
+    selected = selected.tolist()
+    selected = list(set(selected))
+
+
+    with open(exp_root, "w") as text_file:
+        for idx, s in enumerate(selected):
+            if idx == len(selected) - 1:
+                text_file.write(entries[s])
+            else:
+                text_file.write(entries[s] + '\n')
+    text_file.close()
