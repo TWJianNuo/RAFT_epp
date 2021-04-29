@@ -91,7 +91,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
             predread = outputs[('depth', 2)]
         else:
             predread = depthpred_deepv2d
-        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * depthpred_deepv2d > 0).float()
+        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * (depthpred_deepv2d > 0)).float()
         predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
@@ -177,7 +177,7 @@ def train(gpu, ngpus_per_node, args):
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
     validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
-    # validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
+    validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
     return
 
 

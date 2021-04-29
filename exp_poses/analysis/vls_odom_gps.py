@@ -525,9 +525,10 @@ if __name__ == '__main__':
 
         maxnum = positions_odompose.shape[0]
         plt.figure()
-        plt.scatter(positions_odompose[0:maxnum, 0], positions_odompose[0:maxnum, 1], 0.5)
-        plt.scatter(positions_relpose[0:maxnum, 0], positions_relpose[0:maxnum, 1], 0.5)
-        plt.scatter(positions_IMUpose[0:maxnum, 0], positions_IMUpose[0:maxnum, 1], 0.5)
+        plt.scatter(positions_odompose[0:maxnum, 0], positions_odompose[0:maxnum, 1], 10)
+        # plt.scatter(positions_relpose[0:maxnum, 0], positions_relpose[0:maxnum, 1], 0.5)
+        plt.scatter(positions_IMUpose[0:maxnum, 0], positions_IMUpose[0:maxnum, 1], 10)
+        plt.legend(['Odom', 'IMU'])
         plt.show()
 
         positions_odompose_imu = list()

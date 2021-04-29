@@ -461,7 +461,7 @@ def read_splits():
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     val_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'val_files.txt'), 'r')]
     test_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
-    return test_entries
+    return train_entries
 
 def get_imu_coord(root, seq, index):
     scale = latToScale(read_into_numbers(os.path.join(root, seq, 'oxts/data', "{}.txt".format(str(0).zfill(10))))[0])
@@ -471,10 +471,27 @@ def get_imu_coord(root, seq, index):
     t1 = np.array([mx, my, nums[2]])
     return t1
 
+def get_reldepth_binrange(depthnp_relfs):
+    binnum = 8
+
+    manual_l = -0.39772
+    mannual_r = 0.245844
+
+    depthnp_relfs_sorted = np.sort(depthnp_relfs)
+    stpos = np.argmin(np.abs(depthnp_relfs_sorted - manual_l)) / depthnp_relfs_sorted.shape[0]
+    edpos = np.argmin(np.abs(depthnp_relfs_sorted - mannual_r)) / depthnp_relfs_sorted.shape[0]
+    numpts = depthnp_relfs_sorted.shape[0]
+
+    samplepos = np.linspace(start=stpos, stop=edpos, num=binnum - 1)
+    sampled_depth = depthnp_relfs_sorted[(samplepos * numpts).astype(np.int)]
+    sampled_depth = np.concatenate([sampled_depth, np.array([0])])
+    sampled_depth = np.sort(sampled_depth)
+
+    return sampled_depth
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_root', type=str)
-    parser.add_argument('--odomPose_root', type=str)
     parser.add_argument('--RANSAC_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--vlsroot', type=str)
@@ -482,57 +499,71 @@ if __name__ == '__main__':
 
     torch.manual_seed(1234)
     np.random.seed(1234)
+    os.makedirs(args.vlsroot, exist_ok=True)
 
+    import glob
+    repeats = glob.glob(os.path.join(args.RANSAC_root, '*'))
     entries = read_splits()
-    # seqmap, entries = generate_seqmapping()
-    scale_gps = list()
-    scale_RANSAC = list()
-    scale_md = list()
-    for _, entry in enumerate(tqdm(entries)):
-        seq, frmidx, _ = entry.split(' ')
+    repeats.sort()
+    for rp in repeats:
+        scale_gps = list()
+        scale_RANSAC = list()
+        scale_md = list()
+        for _, entry in enumerate(tqdm(entries)):
+            seq, frmidx, _ = entry.split(' ')
 
-        # Read GPS Locations
-        calib_dir = os.path.join(args.dataset_root, "{}".format(seq[0:10]))
-        cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
-        velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
-        imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))
-        intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
-        try:
-            pose_gps = get_pose(args.dataset_root, seq, int(frmidx), extrinsic)
-        except:
-            continue
-        # Read RANSAC Locations
-        RANSACPos_path = os.path.join(args.RANSAC_root, seq, 'image_02', str(frmidx).zfill(10) + '.pickle')
-        if not os.path.exists(RANSACPos_path):
-            continue
-        pose_RANSAC_dict = pickle.load(open(RANSACPos_path, "rb"))
-        pose_RANSAC = pose_RANSAC_dict
+            # Read GPS Locations
+            calib_dir = os.path.join(args.dataset_root, "{}".format(seq[0:10]))
+            cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
+            velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
+            imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))
+            intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
+            try:
+                pose_gps = get_pose(args.dataset_root, seq, int(frmidx), extrinsic)
+            except:
+                continue
+            # Read RANSAC Locations
+            RANSACPos_path = os.path.join(rp, seq, 'image_02', str(frmidx).zfill(10) + '.pickle')
+            pose_RANSAC_dict = pickle.load(open(RANSACPos_path, "rb"))
+            pose_RANSAC = pose_RANSAC_dict[0]
 
-        # Read mD Pred
-        mdPos_path = os.path.join(args.mdPred_root, seq, 'image_02/posepred', str(frmidx).zfill(10) + '.pickle')
-        pose_md_dict = pickle.load(open(mdPos_path, "rb"))
-        pose_md = pose_md_dict[0]
+            # Read mD Pred
+            mdPos_path = os.path.join(args.mdPred_root, seq, 'image_02/posepred', str(frmidx).zfill(10) + '.pickle')
+            pose_md_dict = pickle.load(open(mdPos_path, "rb"))
+            pose_md = pose_md_dict[0]
 
-        # if np.sqrt(np.sum(pose_RANSAC[0:3, 3] ** 2)) == 0 :
-        #     continue
+            scale_gps.append(np.sqrt(np.sum(pose_gps[0:3, 3] ** 2)) + 1e-10)
+            scale_RANSAC.append(np.sqrt(np.sum(pose_RANSAC[0:3, 3] ** 2)) + 1e-10)
+            scale_md.append(np.sqrt(np.sum(pose_md[0:3, 3] ** 2)) + 1e-10)
 
-        scale_gps.append(np.sqrt(np.sum(pose_gps[0:3, 3] ** 2)))
-        # scale_RANSAC.append(np.sqrt(np.sum(pose_RANSAC[0:3, 3] ** 2)))
-        scale_RANSAC.append(pose_RANSAC['scale'])
-        scale_md.append(np.sqrt(np.sum(pose_md[0:3, 3] ** 2)))
+        diff = np.log(np.array(scale_RANSAC)) - np.log(np.array(scale_gps))
+        fig = plt.figure()
+        fig.add_subplot(2, 1, 1)
+        plt.hist(diff, bins=200, range=(-3, 3))
+        plt.title("RANSAC Pose Scale Diff, mean: %f" % (np.mean(diff[np.abs(diff) < 3])))
+        plt.xlabel('Scale diff in log')
+        plt.ylabel('Num of samples in each bin')
 
-    diff = np.log(np.array(scale_RANSAC)) - np.log(np.array(scale_gps))
-    fig = plt.figure()
-    fig.add_subplot(2, 1, 1)
-    plt.hist(diff, bins=200, range=(-3, 3))
-    plt.title("RANSAC Pose Scale Diff, mean: %f" % (np.mean(diff[np.abs(diff) < 3])))
-    plt.xlabel('Scale diff in log')
-    plt.ylabel('Num of samples in each bin')
+        diff = np.log(np.array(scale_md)) - np.log(np.array(scale_gps))
+        fig.add_subplot(2, 1, 2)
+        plt.hist(diff, bins=200, range=(-3, 3))
+        plt.title("mD pred Pose Scale Diff, mean: %f" % (np.mean(diff[np.abs(diff) < 3])))
+        plt.xlabel('Scale diff in log')
+        plt.ylabel('Num of samples in each bin')
 
-    diff = np.log(np.array(scale_md)) - np.log(np.array(scale_gps))
-    fig.add_subplot(2, 1, 2)
-    plt.hist(diff, bins=200, range=(-3, 3))
-    plt.title("mD pred Pose Scale Diff, mean: %f" % (np.mean(diff[np.abs(diff) < 3])))
-    plt.xlabel('Scale diff in log')
-    plt.ylabel('Num of samples in each bin')
-    plt.show()
+        svname = "{}.png".format(rp.split('/')[-1])
+        plt.savefig(os.path.join(args.vlsroot, svname))
+        plt.close()
+
+        if rp.split('/')[-1] == '000':
+            sampled_depth = get_reldepth_binrange(diff)
+            fig = plt.figure()
+            plt.hist(diff, bins=200, range=(-3, 3))
+            plt.vlines(sampled_depth, ymin=-100, ymax=100)
+            plt.savefig(os.path.join(args.vlsroot, 'binedges'))
+            plt.close()
+
+            import pickle
+            pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/exp_poses/eppflownet/pose_bin8.pickle", "wb"))
+
+

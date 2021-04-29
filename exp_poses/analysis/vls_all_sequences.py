@@ -13,6 +13,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+import glob
+import pickle
 
 import torch
 import torch.nn as nn
@@ -455,7 +457,7 @@ def generate_seqmapping():
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    entries = train_entries + evaluation_entries + odom_entries
+    entries = train_entries + odom_entries
     folds = list()
     for entry in entries:
         seq, idx, _ = entry.split(' ')
@@ -472,108 +474,135 @@ def get_imu_coord(root, seq, index):
     t1 = np.array([mx, my, nums[2]])
     return t1
 
+def read_deepv2d_pose(txtpath):
+    # Read Pose from Deepv2d
+    posesstr = readlines(txtpath)
+    poses = list()
+    for pstr in posesstr:
+        pose = np.zeros([4, 4]).flatten()
+        for idx, ele in enumerate(pstr.split(' ')):
+            pose[idx] = float(ele)
+            if idx == 15:
+                break
+        pose = np.reshape(pose, [4, 4])
+        poses.append(pose)
+    pose_deepv2d = poses[3] @ np.linalg.inv(poses[0])
+    pose_deepv2d[0:3, 3] = pose_deepv2d[0:3, 3] * 10
+    return pose_deepv2d
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--RANSACPose_root', type=str)
+    parser.add_argument('--Deepv2d_root', type=str)
     parser.add_argument('--vlsroot', type=str)
     args = parser.parse_args()
+    os.makedirs(args.vlsroot, exist_ok=True)
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
+    odomentries = list()
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_09_30/2011_09_30_drive_0016_sync',
+        '2011_09_30/2011_09_30_drive_0018_sync',
+        '2011_09_30/2011_09_30_drive_0027_sync'
+    ]
+
     folds = generate_seqmapping()
-    for fold in folds:
-        seq = list(seqmap.keys())[2]
-        gtposes_sourse = readlines(os.path.join(args.odomPose_root, "{}.txt".format(str(seqmap[seq[0:21]]['mapid']).zfill(2))))
-        gtposes = list()
-        for gtpose_src in gtposes_sourse:
-            gtpose = np.eye(4).flatten()
-            for numstridx, numstr in enumerate(gtpose_src.split(' ')):
-                gtpose[numstridx] = float(numstr)
-            gtpose = np.reshape(gtpose, [4, 4])
-            gtposes.append(gtpose)
-
-        relposes = list()
-        for k in range(len(gtposes) - 1):
-            relposes.append(np.linalg.inv(gtposes[k + 1]) @ gtposes[k])
-
-        positions_odompose = list()
-        for k in range(len(gtposes)):
-            positions_odompose.append(gtposes[k][0:3, 3] - gtposes[0][0:3, 3])
-        positions_odompose = np.array(positions_odompose)
-
-        positions_relpose = list()
-        stpos = np.array([[0, 0, 0, 1]]).T
-        positions_relpose.append(stpos[0:3, 0])
-        accumP = np.eye(4)
-        for r in relposes:
-            accumP = r @ accumP
-            positions_relpose.append((np.linalg.inv(accumP) @ stpos)[0:3, 0])
-        positions_relpose = np.array(positions_relpose)
+    for _, fold in enumerate(tqdm(folds)):
+        pngs = glob.glob(os.path.join(args.dataset_root, fold, 'image_02/data/*.png'))
+        num_img = len(pngs)
+        seq = fold.split('/')[0]
 
         # Read all GPS Locations
-        calib_dir = os.path.join(args.dataset_root, "{}".format(seq[0:10]))
+        calib_dir = os.path.join(args.dataset_root, "{}".format(fold[0:10]))
         cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
         velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
         imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))
         intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
         imupose_list = list()
-        for k in range(len(gtposes)):
-            taridx = k + seqmap[seq]['stid']
-            imupose_list.append(get_pose(args.dataset_root, "{}/{}_sync".format(seq[0:10], seq), int(k), extrinsic))
+        for k in range(num_img):
+            if k == num_img - 1:
+                imupose_list.append(np.eye(4))
+            else:
+                imupose_list.append(get_pose(args.dataset_root, "{}/{}".format(seq[0:10], fold.split('/')[1]), k, extrinsic))
+
+        RANSACPose_list = list()
+        for k in range(num_img):
+            pose_RANSAC_path = os.path.join(args.RANSACPose_root, "{}/{}".format(seq[0:10], fold.split('/')[1]), 'image_02', str(k).zfill(10) + '.pickle')
+            pose_RANSAC_dict = pickle.load(open(pose_RANSAC_path, "rb"))
+            RANSACPose_list.append(pose_RANSAC_dict[0])
 
         positions_IMUpose = list()
         stpos = np.array([[0, 0, 0, 1]]).T
-        positions_IMUpose.append(stpos[0:3, 0])
+        positions_IMUpose.append(np.array([[0, 0, 0, 1]]))
         accumP = np.eye(4)
         for r in imupose_list:
             accumP = r @ accumP
-            positions_IMUpose.append((np.linalg.inv(accumP) @ stpos)[0:3, 0])
-        positions_IMUpose = np.array(positions_IMUpose)
+            positions_IMUpose.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos).T)
+        positions_IMUpose = np.concatenate(positions_IMUpose)
 
-        maxnum = positions_odompose.shape[0]
-        plt.figure()
-        plt.scatter(positions_odompose[0:maxnum, 0], positions_odompose[0:maxnum, 1], 0.5)
-        plt.scatter(positions_relpose[0:maxnum, 0], positions_relpose[0:maxnum, 1], 0.5)
-        plt.scatter(positions_IMUpose[0:maxnum, 0], positions_IMUpose[0:maxnum, 1], 0.5)
-        plt.show()
+        positions_RANSACpose = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        positions_RANSACpose.append(np.array([[0, 0, 0, 1]]))
+        accumP = np.eye(4)
+        for r in RANSACPose_list:
+            accumP = r @ accumP
+            positions_RANSACpose.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos).T)
+        positions_RANSACpose = np.concatenate(positions_RANSACpose)
 
-        positions_odompose_imu = list()
-        for k in range(positions_odompose.shape[0]):
-            tmppts = np.expand_dims(np.concatenate([positions_odompose[k], np.array([1])]), axis=1)
-            tmppts = np.linalg.inv(extrinsic) @ tmppts
-            positions_odompose_imu.append(tmppts[0:3, 0])
-        positions_odompose_imu = np.array(positions_odompose_imu)
-        positions_odompose_imu = positions_odompose_imu - positions_odompose_imu[0]
+        positions_RANSACpose_gtscale = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        positions_RANSACpose_gtscale.append(np.array([[0, 0, 0, 1]]))
+        accumP = np.eye(4)
+        for idx, r in enumerate(RANSACPose_list):
+            gtscale = np.sqrt(np.sum(imupose_list[idx][0:3, 3] ** 2) + 1e-10)
+            r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * gtscale
+            accumP = r @ accumP
+            positions_RANSACpose_gtscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos).T)
+        positions_RANSACpose_gtscale = np.concatenate(positions_RANSACpose_gtscale)
 
-        positions_imu_imu = list()
-        stpos_imu = get_imu_coord(args.dataset_root, "{}/{}_sync".format(seq[0:10], seq), 0)
-        for k in range(len(gtposes)):
-            taridx = k + seqmap[seq]['stid']
-            positions_imu_imu.append(get_imu_coord(args.dataset_root, "{}/{}_sync".format(seq[0:10], seq), int(k)) - stpos_imu)
-        positions_imu_imu = np.array(positions_imu_imu)
+        if fold in odomseqs:
+            Deepv2dPose_list = list()
+            for k in range(num_img):
+                pose_RANSAC_path = os.path.join(args.Deepv2d_root, "{}/{}".format(seq[0:10], fold.split('/')[1]), 'posepred', str(k).zfill(10) + '.txt')
+                if not os.path.exists(pose_RANSAC_path):
+                    posepred_deepv2d = RANSACPose_list[k]
+                else:
+                    posepred_deepv2d = read_deepv2d_pose(pose_RANSAC_path)
+                Deepv2dPose_list.append(posepred_deepv2d)
 
-        plt.figure()
-        plt.scatter(positions_odompose_imu[0:maxnum, 0], positions_odompose_imu[0:maxnum, 1], 0.5)
-        plt.scatter(positions_imu_imu[0:maxnum, 0], positions_imu_imu[0:maxnum, 1], 0.5)
+            positions_Deepv2dpose = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            positions_Deepv2dpose.append(np.array([[0, 0, 0, 1]]))
+            accumP = np.eye(4)
+            for r in Deepv2dPose_list:
+                accumP = r @ accumP
+                positions_Deepv2dpose.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos).T)
+            positions_Deepv2dpose = np.concatenate(positions_Deepv2dpose)
+        else:
+            positions_Deepv2dpose = None
 
-
-        # for frameidx in range(int(seqmap[seq[0:21]]['stid']), )
-        # # Read Pose gt
-        # frameidx = int(tag[0].split(' ')[1])
-        #
-        # if frameidx - int(seqmap[seq[0:21]]['stid']) < 0 or frameidx + 1 - int(seqmap[seq[0:21]]['stid']) < 0 or \
-        #         frameidx - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse) or frameidx + 1 - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse):
-        #     continue
-        # gtposes_str = [gtposes_sourse[frameidx - int(seqmap[seq[0:21]]['stid'])],
-        #                gtposes_sourse[frameidx + 1 - int(seqmap[seq[0:21]]['stid'])]]
-        # gtposes = list()
-        # for gtposestr in gtposes_str:
-        #     gtpose = np.eye(4).flatten()
-        #     for numstridx, numstr in enumerate(gtposestr.split(' ')):
-        #         gtpose[numstridx] = float(numstr)
-        #     gtpose = np.reshape(gtpose, [4, 4])
-        #     gtposes.append(gtpose)
-        # posegt = np.linalg.inv(gtposes[1]) @ gtposes[0]
-
+        if positions_Deepv2dpose is None:
+            plt.figure(figsize=(16, 9))
+            plt.scatter(positions_IMUpose[:, 0], positions_IMUpose[:, 1], 0.5)
+            plt.scatter(positions_RANSACpose[:, 0], positions_RANSACpose[:, 1], 0.5)
+            plt.scatter(positions_RANSACpose_gtscale[:, 0], positions_RANSACpose_gtscale[:, 1], 0.5)
+            plt.axis('equal')
+            plt.legend(["IMU", "RANSAC", 'RANSAC_gtscale'])
+            plt.title("seq: %s" % fold)
+            plt.savefig(os.path.join(args.vlsroot, '{}.png'.format(fold.split('/')[1])))
+            plt.close()
+        else:
+            plt.figure(figsize=(16, 9))
+            plt.scatter(positions_IMUpose[:, 0], positions_IMUpose[:, 1], 0.5)
+            plt.scatter(positions_RANSACpose[:, 0], positions_RANSACpose[:, 1], 0.5)
+            plt.scatter(positions_RANSACpose_gtscale[:, 0], positions_RANSACpose_gtscale[:, 1], 0.5)
+            plt.scatter(positions_Deepv2dpose[:, 0], positions_Deepv2dpose[:, 1], 0.5)
+            plt.axis('equal')
+            plt.legend(["IMU", "RANSAC", 'RANSAC_gtscale', 'Deepv2d'])
+            plt.title("seq: %s" % fold)
+            plt.savefig(os.path.join(args.vlsroot, '{}.png'.format(fold.split('/')[1])))
+            plt.close()

@@ -448,6 +448,14 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         pose_bs = data_blob['posepred_bs']
         tag = data_blob['tag'][0]
 
+        seq, frmidx = tag.split(' ')
+        exportfold = os.path.join(args.export_root, str(iters).zfill(3), seq, 'image_02')
+        os.makedirs(exportfold, exist_ok=True)
+        export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
+
+        if args.skipexist and os.path.exists(export_root):
+            continue
+
         if torch.sum(torch.abs(data_blob['img1'] - data_blob['img2'])) < 1:
             R = np.eye(3)
             t = np.array([[0, 0, -1]]).T
@@ -462,10 +470,6 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         pose_bs_np = pose_bs_np @ np.linalg.inv(pose_bs_np[0]) @ self_pose
         pose_bs_np[0] = self_pose
 
-        seq, frmidx = tag.split(' ')
-        exportfold = os.path.join(args.export_root, str(iters).zfill(3), seq, 'image_02')
-        os.makedirs(exportfold, exist_ok=True)
-        export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
         with open(export_root, 'wb') as handle:
             pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -523,7 +527,7 @@ def read_splits(args, it):
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    if it == 0:
+    if it < 4:
         entries = train_entries
         folds = list()
         for entry in entries:
@@ -646,6 +650,7 @@ if __name__ == '__main__':
     parser.add_argument('--delay', type=int, default=0)
     parser.add_argument('--stid', type=int, default=1)
     parser.add_argument('--evalonly', action='store_true')
+    parser.add_argument('--skipexist', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)

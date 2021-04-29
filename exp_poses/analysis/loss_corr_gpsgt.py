@@ -519,6 +519,7 @@ def get_coord_loss(IMUPose, RANSACPose, idx, estpose, span=50):
     # plt.scatter(accumpos_RANSAC_pos[:, 0], accumpos_RANSAC_pos[:, 2], 5)
     # plt.scatter(accumpos_IMU_neg[:, 0], accumpos_IMU_neg[:, 1], 5)
     # plt.scatter(accumpos_RANSAC_neg[:, 0], accumpos_RANSAC_neg[:, 1], 5)
+    # plt.show()
 
     return loss
 def validate_RANSAC_odom_corr(span, args, eval_loader, banins=False, bangrad=False, samplenum=50000):
@@ -787,7 +788,7 @@ def train(args, entries, entries_map):
                                mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root, stereogt_root=args.stereogt_root,
                                RANSACPose_root=args.RANSACPose_root, raw_root=args.raw_root)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
-    mp.spawn(validate_RANSAC_odom_corr, nprocs=15, args=(args, eval_loader, args.banins, args.bangrad, args.samplenum))
+    mp.spawn(validate_RANSAC_odom_corr, nprocs=1, args=(args, eval_loader, args.banins, args.bangrad, args.samplenum))
     return
 
 
