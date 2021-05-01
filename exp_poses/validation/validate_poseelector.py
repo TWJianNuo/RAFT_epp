@@ -23,7 +23,7 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_poses.dataset_kitti_eigen_poseselector import KITTI_eigen
-from exp_poses.dataset_kitti_odom_poseselector import KITTI_odom
+from exp_poses.dataset_kitti_odom_poseselector_generation import KITTI_odom
 from exp_poses.eppflownet.EppFlowNet_poseselector import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
@@ -310,7 +310,6 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_measures_pose = torch.zeros(2).cuda(device=gpu)
 
     pred_pose_recs = dict()
     for k in seqmap.keys():
@@ -348,13 +347,13 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
 
             RANSAC_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", seq[0:10], seq + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
 
             Deepv2d_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, seq[0:10], seq + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
+                Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, s[0:10], s + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
                 Deepv2d_pose = read_deepv2d_pose(Deepv2d_pose_path)
                 Deepv2d_poses.append(Deepv2d_pose)
 
@@ -576,8 +575,8 @@ def train(gpu, ngpus_per_node, args):
 
         print("GPU %d, fromm %d to %d, in total %d" % (gpu, stidx, edidx, len(entries[stidx:edidx])))
 
-        eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=entries[stidx:edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
-                                  depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+        eval_dataset = KITTI_odom(root=args.dataset_root, odomroot=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=entries[stidx:edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
+                                  ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                                   RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
 
         eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, shuffle=False)

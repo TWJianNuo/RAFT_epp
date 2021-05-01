@@ -44,200 +44,8 @@ MAX_FLOW = 400
 SUM_FREQ = 100
 VAL_FREQ = 5000
 
-class SSIM(nn.Module):
-    """Layer to compute the SSIM loss between a pair of images
-    """
-    def __init__(self):
-        super(SSIM, self).__init__()
-        self.mu_x_pool   = nn.AvgPool2d(3, 1)
-        self.mu_y_pool   = nn.AvgPool2d(3, 1)
-        self.sig_x_pool  = nn.AvgPool2d(3, 1)
-        self.sig_y_pool  = nn.AvgPool2d(3, 1)
-        self.sig_xy_pool = nn.AvgPool2d(3, 1)
-
-        self.refl = nn.ReflectionPad2d(1)
-
-        self.C1 = 0.01 ** 2
-        self.C2 = 0.03 ** 2
-
-    def forward(self, x, y):
-        x = self.refl(x)
-        y = self.refl(y)
-
-        mu_x = self.mu_x_pool(x)
-        mu_y = self.mu_y_pool(y)
-
-        sigma_x  = self.sig_x_pool(x ** 2) - mu_x ** 2
-        sigma_y  = self.sig_y_pool(y ** 2) - mu_y ** 2
-        sigma_xy = self.sig_xy_pool(x * y) - mu_x * mu_y
-
-        SSIM_n = (2 * mu_x * mu_y + self.C1) * (2 * sigma_xy + self.C2)
-        SSIM_d = (mu_x ** 2 + mu_y ** 2 + self.C1) * (sigma_x + sigma_y + self.C2)
-
-        return torch.clamp((1 - SSIM_n / SSIM_d) / 2, 0, 1)
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def fetch_optimizer(args, model, steps_per_epoch):
-    """ Create the optimizer and learning rate scheduler """
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=20, steps_per_epoch=steps_per_epoch, pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
-    return optimizer, scheduler
-
-class Logger:
-    def __init__(self, logpath):
-        self.logpath = logpath
-        self.writer = None
-
-    def create_summarywriter(self):
-        if self.writer is None:
-            self.writer = SummaryWriter(self.logpath)
-
-    def write_vls(self, data_blob, outputs, step):
-        img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        insmap = data_blob['insmap'][0].squeeze().numpy()
-        insvls = vls_ins(img1, insmap)
-
-        depthpredvls = tensor2disp(1 / data_blob['mdDepth_pred'], vmax=0.15, viewind=0)
-        imgrecon = tensor2rgb(outputs[('img1_recon', 2)][:, -1], viewind=0)
-
-        img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid = np.concatenate([np.array(depthpredvls), np.array(imgrecon)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid)], axis=0)
-        self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-        X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], outputs)
-        self.writer.add_image('X', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
-
-        X = self.vls_objmvment(np.array(insvls), data_blob['insmap'], data_blob['posepred'])
-        self.writer.add_image('objmvment', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
-
-    def vls_sampling(self, img1, img2, depth, outputs):
-        depth_np = depth[0].squeeze().cpu().numpy()
-        h, w, _ = img1.shape
-        xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
-
-        dsratio = 4
-        slRange_sel = (np.mod(xx, dsratio) == 0) * (np.mod(yy, dsratio) == 0) * (depth_np > 0)
-        if np.sum(slRange_sel) > 0:
-            xxfsl = xx[slRange_sel]
-            yyfsl = yy[slRange_sel]
-            rndidx = np.random.randint(0, xxfsl.shape[0], 1).item()
-
-            xxfsl_sel = xxfsl[rndidx]
-            yyfsl_sel = yyfsl[rndidx]
-
-            slvlsxx_fg = (outputs['sample_pts'][0, :, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), 0].detach().cpu().numpy() + 1) / 2 * w
-            slvlsyy_fg = (outputs['sample_pts'][0, :, int(yyfsl_sel / dsratio), int(xxfsl_sel / dsratio), 1].detach().cpu().numpy() + 1) / 2 * h
-        else:
-            slvlsxx_fg = None
-            slvlsyy_fg = None
-
-        cm = plt.get_cmap('magma')
-        rndcolor = cm(1 / depth_np[yyfsl_sel, xxfsl_sel] / 0.15)[0:3]
-
-        fig = plt.figure(figsize=(16, 9))
-        canvas = FigureCanvasAgg(fig)
-        fig.add_subplot(2, 1, 1)
-        plt.scatter(xxfsl_sel, yyfsl_sel, 10, [rndcolor])
-        plt.imshow(img1)
-        plt.title("Input")
-
-        fig.add_subplot(2, 1, 2)
-        if slvlsxx_fg is not None and slvlsyy_fg is not None:
-            plt.scatter(slvlsxx_fg, slvlsyy_fg, 5, np.random.rand(slvlsyy_fg.shape[0], 3))
-        plt.imshow(img2)
-        plt.title("Sampling Arae")
-
-        fig.tight_layout()  # Or equivalently,  "plt.tight_layout()"
-        canvas.draw()
-        buf = canvas.buffer_rgba()
-        plt.close()
-        X = np.asarray(buf)
-        return X
-
-    def vls_objmvment(self, img1, insmap, posepred):
-        insmap_np = insmap[0].squeeze().cpu().numpy()
-        posepred_np = posepred[0].cpu().numpy()
-        xx, yy = np.meshgrid(range(insmap_np.shape[1]), range(insmap_np.shape[0]), indexing='xy')
-        fig, ax = plt.subplots(figsize=(16,9))
-        canvas = FigureCanvasAgg(fig)
-        ax.imshow(img1)
-        for k in np.unique(insmap_np):
-            if k == 0:
-                 continue
-            xxf = xx[insmap_np == k]
-            yyf = yy[insmap_np == k]
-
-            xmin = xxf.min()
-            xmax = xxf.max()
-            ymin = yyf.min()
-            ymax = yyf.max()
-
-            if (ymax - ymin) * (xmax - xmin) < 1000:
-                continue
-
-            rect = patches.Rectangle((xmin, ymax), xmax - xmin, ymin - ymax, linewidth=1, facecolor='none', edgecolor='r')
-            ax.add_patch(rect)
-
-            ins_relpose = posepred_np[k] @ np.linalg.inv(posepred_np[0])
-            mvdist = np.sqrt(np.sum(ins_relpose[0:3, 3:4] ** 2))
-            ax.text(xmin + 5, ymin + 10, '%.3f' % mvdist, fontsize=6, c='r', weight='bold')
-
-        plt.axis('off')
-        canvas.draw()
-        buf = canvas.buffer_rgba()
-        plt.close()
-        X = np.asarray(buf)
-        return X
-
-    def write_vls_eval(self, data_blob, outputs, tagname, step):
-        img1 = data_blob['img1'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        img2 = data_blob['img2'][0].permute([1, 2, 0]).numpy().astype(np.uint8)
-        insmap = data_blob['insmap'][0].squeeze().numpy()
-
-        insvls = vls_ins(img1, insmap)
-
-        depthpredvls = tensor2disp(1 / data_blob['mdDepth_pred'], vmax=0.15, viewind=0)
-        imgrecon = tensor2rgb(outputs[('img1_recon', 2)][:, -1], viewind=0)
-
-        img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid = np.concatenate([np.array(depthpredvls), np.array(imgrecon)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid)], axis=0)
-        self.writer.add_image('{}_predvls'.format(tagname), (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
-
-    def write_dict(self, results, step):
-        for key in results:
-            self.writer.add_scalar(key, results[key], step)
-
-    def close(self):
-        self.writer.close()
-
-def compute_errors(gt, pred):
-    thresh = np.maximum((gt / pred), (pred / gt))
-
-    d1 = (thresh < 1.25).mean()
-    d2 = (thresh < 1.25 ** 2).mean()
-    d3 = (thresh < 1.25 ** 3).mean()
-
-    rms = (gt - pred) ** 2
-    rms = np.sqrt(rms.mean())
-
-    log_rms = (np.log(gt) - np.log(pred)) ** 2
-    log_rms = np.sqrt(log_rms.mean())
-
-    abs_rel = np.mean(np.abs(gt - pred) / gt)
-    sq_rel = np.mean(((gt - pred) ** 2) / gt)
-
-    err = np.log(pred) - np.log(gt)
-    silog = np.sqrt(np.mean(err ** 2) - np.mean(err) ** 2) * 100
-
-    err = np.abs(np.log10(pred) - np.log10(gt))
-    log10 = np.mean(err)
-
-    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 def readlines(filename):
     with open(filename, 'r') as f:
@@ -310,8 +118,7 @@ def validate_kitti(model, args, eval_loader):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    modelname = args.restore_ckpt.split('/')[-2]
-    exportname = modelname + '_selected'
+    export_root = get_export_name(args)
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
@@ -339,7 +146,7 @@ def validate_kitti(model, args, eval_loader):
         pose_bs_np = RANSAC_pose @ np.linalg.inv(RANSAC_pose[0]) @ poseselected_np
         pose_bs_np[0] = poseselected_np
 
-        export_folder = os.path.join(args.export_root, exportname, seq[0:10], seq + "_sync", 'image_02')
+        export_folder = os.path.join(export_root, seq[0:10], seq + "_sync", 'image_02')
         os.makedirs(export_folder, exist_ok=True)
         export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
         with open(export_path, 'wb') as handle:
@@ -392,7 +199,16 @@ def read_splits(args):
             frmidx = png.split('/')[-1].split('.')[0]
             entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
             entries_expand.append(entry_expand)
-    return odom_entries + entries_expand + evaluation_entries
+
+    tot_entries = odom_entries + entries_expand + evaluation_entries
+
+    export_root = get_export_name(args)
+    ungenerated_entries = list()
+    for entry in tot_entries:
+        seq, frmidx, _ = entry.split('/')
+        if not os.path.exists(os.path.join(export_root, seq, "{}.pickle".format(str(frmidx).zfill(10)))):
+            ungenerated_entries.append(entry)
+    return ungenerated_entries
 
 
 def get_reprojection_loss(img1, outputs, ssim, args):
@@ -486,6 +302,9 @@ def train(gpu, ngpus_per_node, args):
     entries = read_splits(args)
 
     interval = np.floor(len(entries) / ngpus_per_node).astype(np.int).item()
+    if interval == 0:
+        return
+
     if args.gpu == ngpus_per_node - 1:
         stidx = int(interval * args.gpu)
         edidx = len(entries)
@@ -504,6 +323,12 @@ def train(gpu, ngpus_per_node, args):
     validate_kitti(model.module, args, eval_loader)
 
     return
+
+def get_export_name(args):
+    modelname = args.restore_ckpt.split('/')[-2]
+    exportname = modelname + '_selected'
+    export_folder = os.path.join(args.export_root, exportname)
+    return export_folder
 
 
 if __name__ == '__main__':
@@ -535,6 +360,7 @@ if __name__ == '__main__':
     parser.add_argument('--deepv2dPose_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--export_root', type=str)
+    parser.add_argument('--enable_regeneration', action="store_true")
     parser.add_argument('--odomroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
@@ -551,6 +377,11 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     ngpus_per_node = torch.cuda.device_count()
+
+    if args.enable_regeneration:
+        import shutil
+        export_folder = get_export_name(args)
+        shutil.rmtree(export_folder)
 
     if args.distributed:
         args.world_size = ngpus_per_node
