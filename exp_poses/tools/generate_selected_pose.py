@@ -10,7 +10,6 @@ import cv2
 import time
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -24,8 +23,8 @@ import time
 
 from torch.utils.data import DataLoader
 from exp_poses.dataset_kitti_eigen_poseselector import KITTI_eigen
-from exp_poses.dataset_kitti_odom_poseselector import KITTI_odom
-from exp_poses.eppflownet.EppFlowNet_poseselector_scaleonly import EppFlowNet
+from exp_poses.dataset_kitti_odom_poseselector_generation import KITTI_odom
+from exp_poses.eppflownet.EppFlowNet_poseselector import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -36,6 +35,7 @@ from posenet import Posenet
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.autograd import Variable
+import glob
 
 from tqdm import tqdm
 
@@ -182,7 +182,7 @@ class Logger:
             rect = patches.Rectangle((xmin, ymax), xmax - xmin, ymin - ymax, linewidth=1, facecolor='none', edgecolor='r')
             ax.add_patch(rect)
 
-            ins_relpose = np.linalg.inv(posepred_np[0]) @ posepred_np[k]
+            ins_relpose = posepred_np[k] @ np.linalg.inv(posepred_np[0])
             mvdist = np.sqrt(np.sum(ins_relpose[0:3, 3:4] ** 2))
             ax.text(xmin + 5, ymin + 10, '%.3f' % mvdist, fontsize=6, c='r', weight='bold')
 
@@ -239,53 +239,113 @@ def compute_errors(gt, pred):
 
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
+def readlines(filename):
+    with open(filename, 'r') as f:
+        filenames = f.readlines()
+    return filenames
+
+def read_calib_file(path):
+    """Read KITTI calibration file
+    (from https://github.com/hunse/kitti)
+    """
+    float_chars = set("0123456789.e+- ")
+    data = {}
+    with open(path, 'r') as f:
+        for line in f.readlines():
+            key, value = line.split(':', 1)
+            value = value.strip()
+            data[key] = value
+            if float_chars.issuperset(value):
+                # try to cast to float array
+                try:
+                    data[key] = np.array(list(map(float, value.split(' '))))
+                except ValueError:
+                    # casting error: data[key] already eq. value, so pass
+                    pass
+    return data
+
+def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
+    pose_imu2cam = np.eye(4)
+    pose_imu2cam[0:3, 0:3] = np.reshape(imu2cam['R'], [3, 3])
+    pose_imu2cam[0:3, 3] = imu2cam['T']
+
+    pose_velo2cam = np.eye(4)
+    pose_velo2cam[0:3, 0:3] = np.reshape(velo2cam['R'], [3, 3])
+    pose_velo2cam[0:3, 3] = velo2cam['T']
+
+    R_rect_00 = np.eye(4)
+    R_rect_00[0:3, 0:3] = cam2cam['R_rect_00'].reshape(3, 3)
+
+    intrinsic = np.eye(4)
+    intrinsic[0:3, 0:3] = cam2cam['P_rect_02'].reshape(3, 4)[0:3, 0:3]
+
+    org_intrinsic = np.eye(4)
+    org_intrinsic[0:3, :] = cam2cam['P_rect_02'].reshape(3, 4)
+    extrinsic_from_intrinsic = np.linalg.inv(intrinsic) @ org_intrinsic
+    extrinsic_from_intrinsic[0:3, 0:3] = np.eye(3)
+
+    extrinsic = extrinsic_from_intrinsic @ R_rect_00 @ pose_velo2cam @ pose_imu2cam
+
+    return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
+
+def read_deepv2d_pose(deepv2dpose_path):
+    # Read Pose from Deepv2d
+    posesstr = readlines(deepv2dpose_path)
+    poses = list()
+    for pstr in posesstr:
+        pose = np.zeros([4, 4]).flatten()
+        for idx, ele in enumerate(pstr.split(' ')):
+            pose[idx] = float(ele)
+            if idx == 15:
+                break
+        pose = np.reshape(pose, [4, 4])
+        poses.append(pose)
+    pose_deepv2d = poses[3] @ np.linalg.inv(poses[0])
+    pose_deepv2d[0:3, 3] = pose_deepv2d[0:3, 3] * 10
+    return pose_deepv2d
+
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=False):
+def validate_kitti(model, args, eval_loader):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_measures_pose = torch.zeros(2).cuda(device=gpu)
-
+    modelname = args.restore_ckpt.split('/')[-2]
+    exportname = modelname + '_selected'
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
         intrinsic = data_blob['intrinsic'].cuda(gpu)
         insmap = data_blob['insmap'].cuda(gpu)
-        posepred = data_blob['posepred'].cuda(gpu)
         mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
         ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
         scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
         mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
-        relpose_odom_gt = data_blob['relpose_odom_gt'].cuda(gpu)
+        posepred = data_blob['posepred'].cuda(gpu)
+        tag = data_blob['tag'][0]
 
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
-        if not isorg:
-            outputs= model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-            posepred = outputs[('afft_all', 2)][:, -1, 0]
-        else:
-            posepred = posepred[:, 5, 0]
+        outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
+        poseselected = outputs[('afft_all', 2)][0, -1, 0]
 
-        eval_measures_pose[0] += torch.sum(torch.abs(posepred - relpose_odom_gt))
-        eval_measures_pose[1] += 1
+        seq = tag.split(' ')[0].split('/')[1][0:21]
+        frmid = tag.split(' ')[1]
 
-        if not(logger is None) and np.mod(val_id, 20) == 0 and not isorg:
-            seq, frmidx = data_blob['tag'][0].split(' ')
-            tag = "{}_{}".format(seq.split('/')[-1], frmidx)
-            logger.write_vls_eval(data_blob, outputs, tag, total_steps)
+        RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", seq[0:10], seq + "_sync", 'image_02', "{}.pickle".format(str(frmid).zfill(10)))
+        RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
 
-    if args.distributed:
-        dist.all_reduce(tensor=eval_measures_pose, op=dist.ReduceOp.SUM, group=group)
+        poseselected_np = poseselected.cpu().numpy()
+        pose_bs_np = RANSAC_pose @ np.linalg.inv(RANSAC_pose[0]) @ poseselected_np
+        pose_bs_np[0] = poseselected_np
 
-    if args.gpu == 0:
-        eval_measures_pose[0] = eval_measures_pose[0] / eval_measures_pose[1]
-        eval_measures_pose = eval_measures_pose.cpu().numpy()
-        print('On %f samples, absl: %f' % (eval_measures_pose[1].item(), eval_measures_pose[0].item()))
+        export_folder = os.path.join(args.export_root, exportname, seq[0:10], seq + "_sync", 'image_02')
+        os.makedirs(export_folder, exist_ok=True)
+        export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
+        with open(export_path, 'wb') as handle:
+            pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        return {'absl': float(eval_measures_pose[0].item()),}
-    else:
-        return None
+    return
 
 class silog_loss(nn.Module):
     def __init__(self, variance_focus):
@@ -296,12 +356,44 @@ class silog_loss(nn.Module):
         d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
-def read_splits():
+def get_odomentries(args):
+    import glob
+    odomentries = list()
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_09_30/2011_09_30_drive_0016_sync',
+        '2011_09_30/2011_09_30_drive_0018_sync',
+        '2011_09_30/2011_09_30_drive_0027_sync'
+    ]
+    for odomseq in odomseqs:
+        leftimgs = glob.glob(os.path.join(args.odomroot, odomseq, 'image_02/data', "*.png"))
+        for leftimg in leftimgs:
+            imgname = os.path.basename(leftimg)
+            odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
+    return odomentries
+
+def read_splits(args):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'val_files_odom.txt'), 'r')]
-    return train_entries, evaluation_entries
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
+    odom_entries = get_odomentries(args)
+
+    entries = train_entries
+    folds = list()
+    for entry in entries:
+        seq, idx, _ = entry.split(' ')
+        folds.append(seq)
+    folds = list(set(folds))
+
+    entries_expand = list()
+    for fold in folds:
+        pngs = glob.glob(os.path.join(args.dataset_root, fold, 'image_02/data/*.png'))
+        for png in pngs:
+            frmidx = png.split('/')[-1].split('.')[0]
+            entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
+            entries_expand.append(entry_expand)
+    return odom_entries + entries_expand + evaluation_entries
+
 
 def get_reprojection_loss(img1, outputs, ssim, args):
     rpjloss = 0
@@ -378,176 +470,46 @@ def train(gpu, ngpus_per_node, args):
         model = torch.nn.DataParallel(model)
         model.cuda()
 
-    logroot = os.path.join(args.logroot, args.name)
-    print("Parameter Count: %d, saving location: %s" % (count_parameters(model), logroot))
+    all_ckpts = glob.glob(os.path.join(args.restore_ckpt, "*.pth"))
+    all_ckpts.sort()
 
-    if args.restore_ckpt is not None:
-        print("=> loading checkpoint '{}'".format(args.restore_ckpt))
-        loc = 'cuda:{}'.format(args.gpu)
-        checkpoint = torch.load(args.restore_ckpt, map_location=loc)
-        model.load_state_dict(checkpoint, strict=False)
+    print("=> loading checkpoint '{}'".format(args.restore_ckpt))
+    loc = 'cuda:{}'.format(args.gpu)
+    checkpoint = torch.load(args.restore_ckpt, map_location=loc)
+    model.load_state_dict(checkpoint, strict=False)
 
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin32.pickle'), 'rb') as f:
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin8.pickle'), 'rb') as f:
         linlogdedge = pickle.load(f)
 
     model.train()
 
-    train_entries, evaluation_entries = read_splits()
+    entries = read_splits(args)
 
-    train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
-                                depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
-                                RANSACPose_root=args.RANSACPose_root, istrain=True, muteaug=False, banremovedup=False, isgarg=False)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
+    interval = np.floor(len(entries) / ngpus_per_node).astype(np.int).item()
+    if args.gpu == ngpus_per_node - 1:
+        stidx = int(interval * args.gpu)
+        edidx = len(entries)
+    else:
+        stidx = int(interval * args.gpu)
+        edidx = int(interval * (args.gpu + 1))
 
-    eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
-                              depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+    print("GPU %d, fromm %d to %d, in total %d" % (gpu, stidx, edidx, len(entries[stidx:edidx])))
+
+    eval_dataset = KITTI_odom(root=args.dataset_root, odomroot=args.odomroot ,inheight=args.evalheight, inwidth=args.evalwidth, entries=entries[stidx:edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
+                              prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
-    eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
-    print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, shuffle=False)
 
-    if args.distributed:
-        group = dist.new_group([i for i in range(ngpus_per_node)])
-
-    optimizer, scheduler = fetch_optimizer(args, model, int(train_dataset.__len__() / 2))
-
-    total_steps = 0
-
-    if args.gpu == 0:
-        logger = Logger(logroot)
-        logger_evaluation = Logger(os.path.join(args.logroot, 'evaluation_eigen_background', args.name))
-        logger_evaluation_org = Logger(os.path.join(args.logroot, 'evaluation_eigen_background', "{}_org".format(args.name)))
-        logger.create_summarywriter()
-        logger_evaluation.create_summarywriter()
-        logger_evaluation_org.create_summarywriter()
-
-    VAL_FREQ = 5000
-    epoch = 0
-    minabsl = 1e10
-
-    ssim = SSIM()
-
-    st = time.time()
-    should_keep_training = True
-    while should_keep_training:
-        train_sampler.set_epoch(epoch)
-        for i_batch, data_blob in enumerate(train_loader):
-            optimizer.zero_grad()
-
-            image1 = data_blob['img1'].cuda(gpu) / 255.0
-            image2 = data_blob['img2'].cuda(gpu) / 255.0
-            intrinsic = data_blob['intrinsic'].cuda(gpu)
-            insmap = data_blob['insmap'].cuda(gpu)
-            posepred = data_blob['posepred'].cuda(gpu)
-            mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
-            ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
-            scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
-            mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
-            rel_pose = data_blob['rel_pose'].cuda(gpu)
-
-            IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
-            leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
-            rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
-            IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
-            leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
-            rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
-
-            gpsscale = torch.sqrt(torch.sum(rel_pose[:, 0:3, 3] ** 2, dim=1))
-
-            mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
-
-            # tensor2disp(1/mD_pred_clipped, vmax=0.15, viewind=0).show()
-            outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-            rpjloss = get_reprojection_loss(image1, outputs, ssim, args)
-            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
-            # get_posel1_loss(gpsscale=rel_pose, outputs=outputs)
-            # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
-
-            if args.enable_seqloss:
-                # loss = rpjloss + seqloss
-                raise Exception("Not implement")
-            elif args.enable_scalelossonly:
-                loss = rpjloss * 0 + scaleloss
-            else:
-                loss = rpjloss + scaleloss
-
-            metrics = dict()
-            metrics['rpjloss'] = rpjloss.item()
-            metrics['scaleloss'] = scaleloss
-            metrics['loss'] = loss
-
-            if torch.sum(torch.isnan(loss)) > 0:
-                print(data_blob['tag'])
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-
-            optimizer.step()
-            scheduler.step()
-
-            # if args.gpu == 0:
-            #     print(i_batch, loss.item(), scaleloss, torch.mean(image1))
-
-            if args.gpu == 0:
-                logger.write_dict(metrics, step=total_steps)
-                if total_steps % SUM_FREQ == 0:
-                    dr = time.time() - st
-                    resths = (args.num_steps - total_steps) * dr / (total_steps + 1) / 60 / 60
-                    print("Step: %d, rest hour: %f, depthloss: %f" % (total_steps, resths, loss.item()))
-                    logger.write_vls(data_blob, outputs, total_steps)
-
-            if total_steps % VAL_FREQ == 1:
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isorg=False)
-                else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isorg=False)
-
-                if args.gpu == 0:
-                    logger_evaluation.write_dict(results, total_steps)
-                    if minabsl > results['absl']:
-                        minabsl = results['absl']
-                        PATH = os.path.join(logroot, 'minabsl.pth')
-                        torch.save(model.state_dict(), PATH)
-                        print("model saved to %s" % PATH)
-
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, total_steps, isorg=True)
-                    logger_evaluation_org.write_dict(results, total_steps)
-                else:
-                    validate_kitti(model.module, args, eval_loader, None, group, None, isorg=True)
-
-                model.train()
-
-            total_steps += 1
-
-            if total_steps > args.num_steps:
-                should_keep_training = False
-                break
-
-        if args.gpu == 0:
-            PATH = os.path.join(logroot, 'epoch_{}.pth'.format(str(epoch).zfill(3)))
-            torch.save(model.state_dict(), PATH)
-            print("model saved to %s" % PATH)
-        epoch = epoch + 1
-
-    if args.gpu == 0:
-        logger.close()
-        PATH = os.path.join(logroot, 'final.pth')
-        torch.save(model.state_dict(), PATH)
+    validate_kitti(model.module, args, eval_loader)
 
     return
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default='raft', help="name your experiment")
-    parser.add_argument('--stage', help="determines which dataset to use for training")
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
 
-    parser.add_argument('--lr', type=float, default=0.00002)
-    parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
     parser.add_argument('--inheight', type=int, default=320)
@@ -556,29 +518,13 @@ if __name__ == '__main__':
     parser.add_argument('--evalwidth', type=int, default=1216)
     parser.add_argument('--maxinsnum', type=int, default=50)
     parser.add_argument('--min_depth_pred', type=float, default=1)
-    parser.add_argument('--max_depth_pred', type=float, default=85)
-    parser.add_argument('--min_depth_eval', type=float, default=1e-3)
-    parser.add_argument('--max_depth_eval', type=float, default=80)
-    parser.add_argument('--variance_focus', type=float,
-                        help='lambda in paper: [0, 1], higher value more focus on minimizing variance of error',
-                        default=0.85)
     parser.add_argument('--maxlogscale', type=float, default=1)
 
-
-    parser.add_argument('--tscale_range', type=float, default=3)
-    parser.add_argument('--objtscale_range', type=float, default=10)
-    parser.add_argument('--angx_range', type=float, default=0.03)
-    parser.add_argument('--angy_range', type=float, default=0.06)
-    parser.add_argument('--angz_range', type=float, default=0.01)
-    parser.add_argument('--num_layers', type=int, default=50)
-    parser.add_argument('--num_scales', type=int, default=32)
-    parser.add_argument('--num_angs', type=int, default=1)
+    parser.add_argument('--num_scales', type=int, default=8)
+    parser.add_argument('--num_angs', type=int, default=4)
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
-    parser.add_argument('--clip', type=float, default=1.0)
-    parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--semantics_root', type=str)
     parser.add_argument('--depth_root', type=str)
@@ -586,11 +532,11 @@ if __name__ == '__main__':
     parser.add_argument('--prediction_root', type=str, default=None)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--RANSACPose_root', type=str)
+    parser.add_argument('--deepv2dPose_root', type=str)
     parser.add_argument('--ins_root', type=str)
-    parser.add_argument('--logroot', type=str)
+    parser.add_argument('--export_root', type=str)
+    parser.add_argument('--odomroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
-    parser.add_argument('--enable_seqloss', action='store_true')
-    parser.add_argument('--enable_scalelossonly', action='store_true')
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
@@ -601,10 +547,6 @@ if __name__ == '__main__':
 
     torch.manual_seed(1234)
     np.random.seed(1234)
-
-    if not os.path.isdir(os.path.join(args.logroot, args.name)):
-        os.makedirs(os.path.join(args.logroot, args.name), exist_ok=True)
-    os.makedirs(os.path.join(args.logroot, 'evaluation', args.name), exist_ok=True)
 
     torch.cuda.empty_cache()
 

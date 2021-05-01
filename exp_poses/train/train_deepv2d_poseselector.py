@@ -182,7 +182,7 @@ class Logger:
             rect = patches.Rectangle((xmin, ymax), xmax - xmin, ymin - ymax, linewidth=1, facecolor='none', edgecolor='r')
             ax.add_patch(rect)
 
-            ins_relpose = posepred_np[k] @ np.linalg.inv(posepred_np[0])
+            ins_relpose = np.linalg.inv(posepred_np[0]) @ posepred_np[k]
             mvdist = np.sqrt(np.sum(ins_relpose[0:3, 3:4] ** 2))
             ax.text(xmin + 5, ymin + 10, '%.3f' % mvdist, fontsize=6, c='r', weight='bold')
 

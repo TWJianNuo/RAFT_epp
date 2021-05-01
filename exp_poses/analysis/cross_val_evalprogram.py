@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pickle
+import copy
 
 import torch
 from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen, read_deepv2d_pose
@@ -25,7 +26,7 @@ def readlines(filename):
     return filenames
 
 def validate_RANSAC_odom_offline_accum_selfscale(args, seqmap, entries):
-    accumerr = {'pose_deepv2d': 0, "pose_RANSAC": 0}
+    accumerr = {'pose_deepv2d': 0, "pose_RANSAC": 0, 'pose_RANSAC_deevp2dscale':0}
 
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'val_files_odom.txt'), 'r')]
@@ -68,6 +69,9 @@ def validate_RANSAC_odom_offline_accum_selfscale(args, seqmap, entries):
         pose_RANSAC_path = os.path.join(args.RANSAC_pose_root, entry.split(' ')[0], 'image_02', str(frameidx).zfill(10) + '.pickle')
         pose_RANSAC = pickle.load(open(pose_RANSAC_path, "rb"))
         poses['pose_RANSAC'] = pose_RANSAC[0]
+
+        poses['pose_RANSAC_deevp2dscale'] = copy.deepcopy(poses['pose_RANSAC'])
+        poses['pose_RANSAC_deevp2dscale'][0:3, 3] = poses['pose_RANSAC_deevp2dscale'][0:3, 3] / np.sqrt(np.sum(pose_RANSAC[0][0:3, 3] ** 2) +1e-8) * np.sqrt(np.sum(posepred_deepv2d[0:3, 3] ** 2) +1e-8)
 
         for k in accumerr.keys():
             accumerr[k] += np.sum(np.abs(posegt - poses[k]))
