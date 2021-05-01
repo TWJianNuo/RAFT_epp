@@ -370,7 +370,7 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
             for k in range(len(gtposes) - 1):
                 relposes.append(np.linalg.inv(gtposes[k + 1]) @ gtposes[k])
 
-            calib_dir = os.path.join(args.dataset_root, "{}".format(seq[0:10]))
+            calib_dir = os.path.join(args.dataset_root, "{}".format(s[0:10]))
             cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
             velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
             imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))

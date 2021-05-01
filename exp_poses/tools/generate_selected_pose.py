@@ -154,15 +154,6 @@ def validate_kitti(model, args, eval_loader):
 
     return
 
-class silog_loss(nn.Module):
-    def __init__(self, variance_focus):
-        super(silog_loss, self).__init__()
-        self.variance_focus = variance_focus
-
-    def forward(self, depth_est, depth_gt, mask):
-        d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
-        return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
-
 def get_odomentries(args):
     import glob
     odomentries = list()
@@ -206,67 +197,31 @@ def read_splits(args):
     ungenerated_entries = list()
     for entry in tot_entries:
         seq, frmidx, _ = entry.split(' ')
-        if not os.path.exists(os.path.join(export_root, seq, "{}.pickle".format(str(frmidx).zfill(10)))):
+        if not os.path.exists(os.path.join(export_root, seq, "image_02/{}.pickle".format(str(frmidx).zfill(10)))):
             ungenerated_entries.append(entry)
     return ungenerated_entries
 
+def read_odomeval_splits():
+    seqmapping = \
+    ['00 2011_10_03_drive_0027 000000 004540',
+     "04 2011_09_30_drive_0016 000000 000270",
+     "05 2011_09_30_drive_0018 000000 002760",
+     "07 2011_09_30_drive_0027 000000 001100"]
 
-def get_reprojection_loss(img1, outputs, ssim, args):
-    rpjloss = 0
-    _, _, h, w = img1.shape
-    selector = (outputs[('img1_recon', 2)][:, -1].sum(dim=1, keepdim=True) != 0).float()
-    selector[:, :, 0:int(0.25810811 * h)] = 0
-    for k in range(1, 3, 1):
-        recimg = outputs[('img1_recon', k)].squeeze(1)
-        # tensor2rgb(recimg, viewind=0).show()
-        # tensor2disp(selector, viewind=0, vmax=1).show()
-        ssimloss = ssim(recimg, img1).mean(dim=1, keepdim=True)
-        l1_loss = torch.abs(recimg - img1).mean(dim=1, keepdim=True)
-        rpjloss_c = 0.85 * ssimloss + 0.15 * l1_loss
-        rpjloss_cm = (rpjloss_c * selector).sum() / (selector.sum() + 1)
-        rpjloss += rpjloss_cm
-    rpjloss = rpjloss / 2
-    return rpjloss
+    entries = list()
+    seqmap = dict()
+    for seqm in seqmapping:
+        mapentry = dict()
+        mapid, seqname, stid, enid = seqm.split(' ')
+        mapentry['mapid'] = int(mapid)
+        mapentry['stid'] = int(stid)
+        mapentry['enid'] = int(enid)
+        seqmap[seqname] = mapentry
 
-def get_scale_loss(outputs, gpsscale):
-    scaleloss = 0
-    for k in range(1, 3, 1):
-        scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(1) - scale_pred[:, :, 0, 0])
-    scaleloss = scaleloss / 2
-    return scaleloss
-
-def get_posel1_loss(outputs, gpsscale):
-    scaleloss = 0
-    for k in range(1, 3, 1):
-        scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(1) - scale_pred[:, :, 0, 0])
-    scaleloss = scaleloss / 2
-    return scaleloss
-
-def get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args):
-    seqloss_scale = 0
-    seqloss_fin = 0
-    for k in range(1, 3, 1):
-        poses_pred = outputs[('afft_all', k)][:, :, 0, :, :]
-        poses_pred_list = torch.split(poses_pred, dim=1, split_size_or_sections=1)
-        for m in range(len(poses_pred_list)):
-            pose_pred = poses_pred_list[m]
-            pos_pred_forwaed = torch.inverse(leftarrs1 @ pose_pred @ rightarrs1)[:, :, 0:3, 3:4]
-            seqloss_scale_forward = torch.mean(torch.abs(pos_pred_forwaed - IMUlocations1))
-
-            pos_pred_backwaed = torch.inverse(leftarrs2 @ torch.inverse(pose_pred) @ rightarrs2)[:, :, 0:3, 3:4]
-            seqloss_scale_backward = torch.mean(torch.abs(pos_pred_backwaed - IMUlocations2))
-
-            seqloss_scale_c = (seqloss_scale_forward + seqloss_scale_backward) / 2
-            if m == len(poses_pred_list) - 1:
-                seqloss_fin += seqloss_scale_c
-            else:
-                seqloss_scale += seqloss_scale_c
-
-    seqloss_scale = seqloss_scale / 2 / args.num_angs
-    seqloss_fin = seqloss_fin / 2
-    return (seqloss_scale + seqloss_fin) / 2
+        for k in range(int(stid), int(enid)):
+            entries.append("{}/{}_sync {} {}".format(seqname[0:10], seqname, str(k).zfill(10), 'l'))
+    entries.sort()
+    return entries, seqmap
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -330,7 +285,6 @@ def get_export_name(args):
     export_folder = os.path.join(args.export_root, exportname)
     return export_folder
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
@@ -388,3 +342,124 @@ if __name__ == '__main__':
         mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
     else:
         train(args.gpu, ngpus_per_node, args)
+
+    valentries, seqmap = read_odomeval_splits()
+
+    tot_err = dict()
+    tot_err['positions_pred'] = 0
+    tot_err['positions_RANSAC'] = 0
+    tot_err['positions_Deepv2d'] = 0
+    tot_err['positions_RANSAC_Deepv2dscale'] = 0
+
+    for s in seqmap.keys():
+        posrec = dict()
+
+        pred_pose_root = get_export_name(args)
+        pred_pose_root = os.path.join(args.export_root, pred_pose_root)
+        pred_poses = list()
+        for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
+            pred_pose_path = os.path.join(pred_pose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
+            pred_pose = pickle.load(open(pred_pose_path, "rb"))
+            pred_poses.append(pred_pose[0])
+
+        RANSAC_poses = list()
+        for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
+            RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
+            RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
+            RANSAC_poses.append(RANSAC_pose[0])
+
+        Deepv2d_poses = list()
+        for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
+            Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, s[0:10], s + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
+            Deepv2d_pose = read_deepv2d_pose(Deepv2d_pose_path)
+            Deepv2d_poses.append(Deepv2d_pose)
+
+        gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[s]['mapid']).zfill(2))))
+        gtposes = list()
+        for gtpose_src in gtposes_sourse:
+            gtpose = np.eye(4).flatten()
+            for numstridx, numstr in enumerate(gtpose_src.split(' ')):
+                gtpose[numstridx] = float(numstr)
+            gtpose = np.reshape(gtpose, [4, 4])
+            gtposes.append(gtpose)
+
+        relposes = list()
+        for k in range(len(gtposes) - 1):
+            relposes.append(np.linalg.inv(gtposes[k + 1]) @ gtposes[k])
+
+        calib_dir = os.path.join(args.dataset_root, "{}".format(s[0:10]))
+        cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
+        velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
+        imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))
+        intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
+
+        positions_odom = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for r in relposes:
+            accumP = r @ accumP
+            positions_odom.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_odom = np.array(positions_odom)
+
+        positions_pred = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for p in pred_poses:
+            accumP = p @ accumP
+            positions_pred.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_pred = np.array(positions_pred)
+
+        positions_RANSAC = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for r in RANSAC_poses:
+            accumP = r @ accumP
+            positions_RANSAC.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_RANSAC = np.array(positions_RANSAC)
+
+        positions_Deepv2d = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for d in Deepv2d_poses:
+            accumP = d @ accumP
+            positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_Deepv2d = np.array(positions_Deepv2d)
+
+        positions_RANSAC_Deepv2dscale = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for i, r in enumerate(RANSAC_poses):
+            r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(
+                np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
+            accumP = r @ accumP
+            positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
+
+        posrec['positions_pred'] = positions_pred
+        posrec['positions_RANSAC'] = positions_RANSAC
+        posrec['positions_Deepv2d'] = positions_Deepv2d
+        posrec['positions_RANSAC_Deepv2dscale'] = positions_RANSAC_Deepv2dscale
+
+        print("============= %s ============" % (s))
+        print("In total %d images," % positions_odom.shape[0])
+        for k in posrec.keys():
+            err = np.mean(np.sqrt(np.sum((posrec[k] - positions_odom) ** 2, axis=1)))
+            tot_err[k] += err * len(pred_poses)
+            print("%s, err: %f" % (k, err.item()))
+
+        vls_fold = os.path.join(pred_pose_root, 'vls')
+        os.makedirs(vls_fold, exist_ok=True)
+        plt.figure(figsize=(16, 16))
+        plt.scatter(positions_odom[:, 0], positions_odom[:, 1], 0.5)
+        plt.scatter(positions_RANSAC_Deepv2dscale[:, 0], positions_RANSAC_Deepv2dscale[:, 1], 0.5)
+        plt.scatter(positions_pred[:, 0], positions_pred[:, 1], 0.5)
+        plt.scatter(positions_RANSAC[:, 0], positions_RANSAC[:, 1], 0.5)
+        plt.scatter(positions_Deepv2d[:, 0], positions_Deepv2d[:, 1], 0.5)
+        plt.axis('equal')
+        plt.legend(['positions_odom', 'positions_RANSAC_Deepv2dscale', 'positions_pred', 'positions_RANSAC', 'positions_Deepv2d'])
+        plt.savefig(os.path.join(vls_fold, '{}.png'.format(s)))
+        plt.close()
+
+    print("============= %s ============" % ("Summary"))
+    for k in posrec.keys():
+        print("%s, toterr: %f" % (k, tot_err[k] / len(valentries)))
