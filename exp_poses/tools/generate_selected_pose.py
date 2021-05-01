@@ -205,7 +205,7 @@ def read_splits(args):
     export_root = get_export_name(args)
     ungenerated_entries = list()
     for entry in tot_entries:
-        seq, frmidx, _ = entry.split('/')
+        seq, frmidx, _ = entry.split(' ')
         if not os.path.exists(os.path.join(export_root, seq, "{}.pickle".format(str(frmidx).zfill(10)))):
             ungenerated_entries.append(entry)
     return ungenerated_entries
