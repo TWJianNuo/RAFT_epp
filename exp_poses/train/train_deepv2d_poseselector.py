@@ -44,6 +44,72 @@ MAX_FLOW = 400
 SUM_FREQ = 100
 VAL_FREQ = 5000
 
+
+def readlines(filename):
+    with open(filename, 'r') as f:
+        filenames = f.readlines()
+    return filenames
+
+def read_calib_file(path):
+    """Read KITTI calibration file
+    (from https://github.com/hunse/kitti)
+    """
+    float_chars = set("0123456789.e+- ")
+    data = {}
+    with open(path, 'r') as f:
+        for line in f.readlines():
+            key, value = line.split(':', 1)
+            value = value.strip()
+            data[key] = value
+            if float_chars.issuperset(value):
+                # try to cast to float array
+                try:
+                    data[key] = np.array(list(map(float, value.split(' '))))
+                except ValueError:
+                    # casting error: data[key] already eq. value, so pass
+                    pass
+    return data
+
+def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
+    pose_imu2cam = np.eye(4)
+    pose_imu2cam[0:3, 0:3] = np.reshape(imu2cam['R'], [3, 3])
+    pose_imu2cam[0:3, 3] = imu2cam['T']
+
+    pose_velo2cam = np.eye(4)
+    pose_velo2cam[0:3, 0:3] = np.reshape(velo2cam['R'], [3, 3])
+    pose_velo2cam[0:3, 3] = velo2cam['T']
+
+    R_rect_00 = np.eye(4)
+    R_rect_00[0:3, 0:3] = cam2cam['R_rect_00'].reshape(3, 3)
+
+    intrinsic = np.eye(4)
+    intrinsic[0:3, 0:3] = cam2cam['P_rect_02'].reshape(3, 4)[0:3, 0:3]
+
+    org_intrinsic = np.eye(4)
+    org_intrinsic[0:3, :] = cam2cam['P_rect_02'].reshape(3, 4)
+    extrinsic_from_intrinsic = np.linalg.inv(intrinsic) @ org_intrinsic
+    extrinsic_from_intrinsic[0:3, 0:3] = np.eye(3)
+
+    extrinsic = extrinsic_from_intrinsic @ R_rect_00 @ pose_velo2cam @ pose_imu2cam
+
+    return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
+
+def read_deepv2d_pose(deepv2dpose_path):
+    # Read Pose from Deepv2d
+    posesstr = readlines(deepv2dpose_path)
+    poses = list()
+    for pstr in posesstr:
+        pose = np.zeros([4, 4]).flatten()
+        for idx, ele in enumerate(pstr.split(' ')):
+            pose[idx] = float(ele)
+            if idx == 15:
+                break
+        pose = np.reshape(pose, [4, 4])
+        poses.append(pose)
+    pose_deepv2d = poses[3] @ np.linalg.inv(poses[0])
+    pose_deepv2d[0:3, 3] = pose_deepv2d[0:3, 3] * 10
+    return pose_deepv2d
+
 class SSIM(nn.Module):
     """Layer to compute the SSIM loss between a pair of images
     """
@@ -240,12 +306,16 @@ def compute_errors(gt, pred):
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=False):
+def validate_kitti(model, args, eval_loader, group, seqmap):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_measures_pose = torch.zeros(2).cuda(device=gpu)
+
+    pred_pose_recs = dict()
+    for k in seqmap.keys():
+        local_eval_num = int(seqmap[k]['enid']) - int(seqmap[k]['stid'])
+        pred_pose_recs[k] = torch.zeros(local_eval_num, 4, 4).cuda(device=gpu)
 
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
@@ -257,33 +327,154 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isorg=F
         ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
         scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
         mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
-        relpose_odom_gt = data_blob['relpose_odom_gt'].cuda(gpu)
+        tag = data_blob['tag'][0]
 
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
-        if not isorg:
-            outputs= model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-            posepred = outputs[('afft_all', 2)][:, -1, 0]
-        else:
-            posepred = posepred[:, 5, 0]
+        outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
+        posepred = outputs[('afft_all', 2)][:, -1, 0]
 
-        eval_measures_pose[0] += torch.sum(torch.abs(posepred - relpose_odom_gt))
-        eval_measures_pose[1] += 1
+        seq = tag.split(' ')[0].split('/')[1][0:21]
+        frmid = int(tag.split(' ')[1]) - int(seqmap[seq]['stid'])
+        pred_pose_recs[seq][frmid] = posepred
 
-        if not(logger is None) and np.mod(val_id, 20) == 0 and not isorg:
-            seq, frmidx = data_blob['tag'][0].split(' ')
-            tag = "{}_{}".format(seq.split('/')[-1], frmidx)
-            logger.write_vls_eval(data_blob, outputs, tag, total_steps)
-
-    if args.distributed:
-        dist.all_reduce(tensor=eval_measures_pose, op=dist.ReduceOp.SUM, group=group)
+    for k in seqmap.keys():
+        dist.all_reduce(tensor=pred_pose_recs[k], op=dist.ReduceOp.SUM, group=group)
 
     if args.gpu == 0:
-        eval_measures_pose[0] = eval_measures_pose[0] / eval_measures_pose[1]
-        eval_measures_pose = eval_measures_pose.cpu().numpy()
-        print('On %f samples, absl: %f' % (eval_measures_pose[1].item(), eval_measures_pose[0].item()))
 
-        return {'absl': float(eval_measures_pose[0].item()),}
+        tot_err = dict()
+        tot_err['positions_pred'] = 0
+        tot_err['positions_RANSAC'] = 0
+        tot_err['positions_Deepv2d'] = 0
+        tot_err['positions_RANSAC_Deepv2dscale'] = 0
+        tot_err['positions_RANSAC_Odomscale'] = 0
+
+        for s in seqmap.keys():
+            posrec = dict()
+
+            pred_poses = pred_pose_recs[s].cpu().numpy()
+
+            RANSAC_poses = list()
+            for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02',
+                                                "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
+                RANSAC_poses.append(RANSAC_pose[0])
+
+            Deepv2d_poses = list()
+            for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
+                Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, s[0:10], s + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
+                Deepv2d_pose = read_deepv2d_pose(Deepv2d_pose_path)
+                Deepv2d_poses.append(Deepv2d_pose)
+
+            gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[s]['mapid']).zfill(2))))
+            gtposes = list()
+            for gtpose_src in gtposes_sourse:
+                gtpose = np.eye(4).flatten()
+                for numstridx, numstr in enumerate(gtpose_src.split(' ')):
+                    gtpose[numstridx] = float(numstr)
+                gtpose = np.reshape(gtpose, [4, 4])
+                gtposes.append(gtpose)
+
+            relposes = list()
+            for k in range(len(gtposes) - 1):
+                relposes.append(np.linalg.inv(gtposes[k + 1]) @ gtposes[k])
+
+            calib_dir = os.path.join(args.dataset_root, "{}".format(s[0:10]))
+            cam2cam = read_calib_file(os.path.join(calib_dir, 'calib_cam_to_cam.txt'))
+            velo2cam = read_calib_file(os.path.join(calib_dir, 'calib_velo_to_cam.txt'))
+            imu2cam = read_calib_file(os.path.join(calib_dir, 'calib_imu_to_velo.txt'))
+            intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
+
+            positions_odom = list()
+            scale_odom = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for r in relposes:
+                accumP = r @ accumP
+                positions_odom.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+                scale_odom.append(np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10))
+            positions_odom = np.array(positions_odom)
+            scale_odom = np.array(scale_odom)
+
+            positions_pred = list()
+            scale_pred = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for p in pred_poses:
+                accumP = p @ accumP
+                positions_pred.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+                scale_pred.append(np.sqrt(np.sum(p[0:3, 3] ** 2) + 1e-10))
+            positions_pred = np.array(positions_pred)
+            scale_pred = np.array(scale_pred)
+
+            positions_RANSAC = list()
+            scale_RANSAC = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for r in RANSAC_poses:
+                accumP = r @ accumP
+                positions_RANSAC.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+                scale_RANSAC.append(np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10))
+            positions_RANSAC = np.array(positions_RANSAC)
+            scale_RANSAC = np.array(scale_RANSAC)
+
+            positions_Deepv2d = list()
+            scale_Deepv2d = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for d in Deepv2d_poses:
+                accumP = d @ accumP
+                positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+                scale_Deepv2d.append(np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10))
+            positions_Deepv2d = np.array(positions_Deepv2d)
+            scale_Deepv2d = np.array(scale_Deepv2d)
+
+            positions_RANSAC_Deepv2dscale = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for i, r in enumerate(RANSAC_poses):
+                r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(
+                    np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
+                accumP = r @ accumP
+                positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
+
+            positions_RANSAC_Odomscale = list()
+            stpos = np.array([[0, 0, 0, 1]]).T
+            accumP = np.eye(4)
+            for i, r in enumerate(RANSAC_poses):
+                r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(
+                    np.sum(relposes[i][0:3, 3] ** 2) + 1e-10)
+                accumP = r @ accumP
+                positions_RANSAC_Odomscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            positions_RANSAC_Odomscale = np.array(positions_RANSAC_Odomscale)
+
+            posrec['positions_pred'] = positions_pred
+            posrec['positions_RANSAC'] = positions_RANSAC
+            posrec['positions_Deepv2d'] = positions_Deepv2d
+            posrec['positions_RANSAC_Deepv2dscale'] = positions_RANSAC_Deepv2dscale
+            posrec['positions_RANSAC_Odomscale'] = positions_RANSAC_Odomscale
+
+            scalerec = dict()
+            scalerec['scale_pred'] = scale_pred
+            scalerec['scale_RANSAC'] = scale_RANSAC
+            scalerec['scale_Deepv2d'] = scale_Deepv2d
+
+            print("============= %s ============" % (s))
+            print("In total %d images," % positions_odom.shape[0])
+            for k in posrec.keys():
+                err_odom = np.mean(np.sqrt(np.sum((posrec[k] - positions_odom) ** 2, axis=1)))
+
+                if 'scale_{}'.format(k.split('_')[1]) in scalerec.keys():
+                    err_scale = np.mean(np.abs(scalerec['scale_{}'.format(k.split('_')[1])] - scale_odom))
+                else:
+                    err_scale = np.nan
+
+                tot_err[k] += err_odom * len(pred_poses)
+                print("%s, err_odom: %f, err_scale: %f" % (k, err_odom.item(), err_scale.item()))
+        return {'absl': float(tot_err['positions_pred'].item()),}
     else:
         return None
 
@@ -296,12 +487,33 @@ class silog_loss(nn.Module):
         d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
+def read_odomeval_splits():
+    # seqmapping = \
+    # ['00 2011_10_03_drive_0027 000000 004540']
+
+    seqmapping = \
+    ["04 2011_09_30_drive_0016 000000 000270"]
+
+    entries = list()
+    seqmap = dict()
+    for seqm in seqmapping:
+        mapentry = dict()
+        mapid, seqname, stid, enid = seqm.split(' ')
+        mapentry['mapid'] = int(mapid)
+        mapentry['stid'] = int(stid)
+        mapentry['enid'] = int(enid)
+        seqmap[seqname] = mapentry
+
+        for k in range(int(stid), int(enid)):
+            entries.append("{}/{}_sync {} {}".format(seqname[0:10], seqname, str(k).zfill(10), 'l'))
+    entries.sort()
+    return entries, seqmap
+
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'val_files_odom.txt'), 'r')]
-    return train_entries, evaluation_entries
+    evaluation_entries, seqmap = read_odomeval_splits()
+    return train_entries, evaluation_entries, seqmap
 
 def get_reprojection_loss(img1, outputs, ssim, args):
     rpjloss_cale = 0
@@ -392,7 +604,17 @@ def train(gpu, ngpus_per_node, args):
 
     model.train()
 
-    train_entries, evaluation_entries = read_splits()
+    train_entries, evaluation_entries, seqmap = read_splits()
+
+    interval = np.floor(len(evaluation_entries) / ngpus_per_node).astype(np.int).item()
+    if args.gpu == ngpus_per_node - 1:
+        stidx = int(interval * args.gpu)
+        edidx = len(evaluation_entries)
+    else:
+        stidx = int(interval * args.gpu)
+        edidx = int(interval * (args.gpu + 1))
+
+    print("GPU %d, eval fromm %d to %d, in total %d" % (gpu, stidx, edidx, edidx - stidx))
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
                                 depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
@@ -400,11 +622,10 @@ def train(gpu, ngpus_per_node, args):
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
-    eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
+    eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries[stidx : edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
                               depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
-    eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False)
 
     print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
 
@@ -498,10 +719,7 @@ def train(gpu, ngpus_per_node, args):
                     logger.write_vls(data_blob, outputs, total_steps)
 
             if total_steps % VAL_FREQ == 1:
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, logger, group, total_steps, isorg=False)
-                else:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, None, isorg=False)
+                results = validate_kitti(model.module, args, eval_loader, group, seqmap)
 
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
@@ -511,11 +729,11 @@ def train(gpu, ngpus_per_node, args):
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
 
-                if args.gpu == 0:
-                    results = validate_kitti(model.module, args, eval_loader, None, group, total_steps, isorg=True)
-                    logger_evaluation_org.write_dict(results, total_steps)
-                else:
-                    validate_kitti(model.module, args, eval_loader, None, group, None, isorg=True)
+                # if args.gpu == 0:
+                #     results = validate_kitti(model.module, args, eval_loader, None, group, total_steps, isorg=True)
+                #     logger_evaluation_org.write_dict(results, total_steps)
+                # else:
+                #     validate_kitti(model.module, args, eval_loader, None, group, None, isorg=True)
 
                 model.train()
 
@@ -585,6 +803,7 @@ if __name__ == '__main__':
     parser.add_argument('--prediction_root', type=str, default=None)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--RANSACPose_root', type=str)
+    parser.add_argument('--deepv2dPose_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)

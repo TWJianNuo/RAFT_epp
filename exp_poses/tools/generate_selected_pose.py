@@ -192,6 +192,8 @@ def read_splits(args):
             entries_expand.append(entry_expand)
 
     tot_entries = odom_entries + entries_expand + evaluation_entries
+    tot_entries = list(set(tot_entries))
+    tot_entries.sort()
 
     export_root = get_export_name(args)
     ungenerated_entries = list()
