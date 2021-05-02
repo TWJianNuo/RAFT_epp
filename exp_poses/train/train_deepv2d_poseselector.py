@@ -488,11 +488,11 @@ class silog_loss(nn.Module):
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
 def read_odomeval_splits():
-    # seqmapping = \
-    # ['00 2011_10_03_drive_0027 000000 004540']
-
     seqmapping = \
-    ["04 2011_09_30_drive_0016 000000 000270"]
+    ['00 2011_10_03_drive_0027 000000 004540']
+
+    # seqmapping = \
+    # ["04 2011_09_30_drive_0016 000000 000270"]
 
     entries = list()
     seqmap = dict()
@@ -687,6 +687,7 @@ def train(gpu, ngpus_per_node, args):
 
             if args.enable_seqloss:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 + seqloss
+                print("111")
             elif args.enable_scalelossonly:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 * 0 + scaleloss
             else:
