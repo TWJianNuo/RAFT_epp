@@ -168,7 +168,7 @@ def read_deepv2d_pose(deepv2dpose_path):
 
 class KITTI_eigen(data.Dataset):
     def __init__(self, entries, inheight, inwidth, maxinsnum, root, ins_root, depth_root, depthvls_root, mdPred_root=None,
-                 prediction_root=None, istrain=True, muteaug=False, isgarg=False, banremovedup=False, deepv2dpred_root=None, flowPred_root=None, RANSACPose_root=None, baninsmap=False):
+                 istrain=True, muteaug=False, isgarg=False, banremovedup=False, RANSACPose_root=None):
         super(KITTI_eigen, self).__init__()
         self.istrain = istrain
         self.isgarg = isgarg
@@ -178,11 +178,7 @@ class KITTI_eigen(data.Dataset):
         self.depth_root = depth_root
         self.depthvls_root = depthvls_root
         self.mdPred_root = mdPred_root
-        self.prediction_root = prediction_root
-        self.deepv2dpred_root = deepv2dpred_root
-        self.flowPred_root = flowPred_root
         self.RANSACPose_root = RANSACPose_root
-        self.baninsmap = baninsmap
         self.ins_root = ins_root
         self.inheight = inheight
         self.inwidth = inwidth
@@ -202,7 +198,6 @@ class KITTI_eigen(data.Dataset):
         self.predPosepath_list = list()
         self.deepv2dpredpath_list = list()
         self.deepv2dpredpose_list = list()
-        self.flowpredpath_list = list()
         self.RANSACPose_list = list()
 
         self.entries = list()
@@ -238,34 +233,11 @@ class KITTI_eigen(data.Dataset):
                 raise Exception("instance file %s missing" % inspath)
             self.inspred_list.append(inspath)
 
-            if deepv2dpred_root is not None:
-                deepv2d_path = os.path.join(deepv2dpred_root, seq, 'depthpred', "{}.png".format(str(index).zfill(10)))
-                deepv2dpose_path = os.path.join(deepv2dpred_root, seq, 'posepred', "{}.txt".format(str(index).zfill(10)))
-                if os.path.exists(deepv2d_path):
-                    self.deepv2dpredpath_list.append(deepv2d_path)
-                    self.deepv2dpredpose_list.append(deepv2dpose_path)
-                else:
-                    raise Exception("Deepv2d prediction file %s missing" % deepv2d_path)
-
-            if prediction_root is not None:
-                predDepthpath = os.path.join(prediction_root, seq, 'image_02/depthpred', "{}.png".format(str(index).zfill(10)))
-                predPosepath = os.path.join(prediction_root, seq, 'image_02/posepred', "{}.pickle".format(str(index).zfill(10)))
-                if not os.path.exists(predDepthpath) or not os.path.exists(predPosepath):
-                    raise Exception("prediction file %s missing" % predDepthpath)
-                self.predDepthpath_list.append(predDepthpath)
-                self.predPosepath_list.append(predPosepath)
-
             if RANSACPose_root is not None:
                 RANSACPose_path = os.path.join(RANSACPose_root, seq, 'image_02', "{}.pickle".format(str(index).zfill(10)))
                 if not os.path.exists(RANSACPose_path):
                     raise Exception("RANSAC Pose file %s missing" % RANSACPose_path)
                 self.RANSACPose_list.append(RANSACPose_path)
-
-            if flowPred_root is not None:
-                flowPred_path = os.path.join(flowPred_root, seq, 'image_02', "{}.png".format(str(index).zfill(10)))
-                if not os.path.exists(flowPred_path):
-                    raise Exception("Prediction file %s missing" % flowPred_path)
-                self.flowpredpath_list.append(flowPred_path)
 
             if not os.path.exists(img2path):
                 self.image_list.append([img1path, img1path])
@@ -317,52 +289,21 @@ class KITTI_eigen(data.Dataset):
         intrinsic = copy.deepcopy(self.intrinsic_list[index])
         rel_pose = copy.deepcopy(self.pose_list[index])
         inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
-
-
-        if self.prediction_root is not None:
-            depthpred = np.array(Image.open(self.predDepthpath_list[index])).astype(np.float32) / 256.0
-        else:
-            depthpred = None
-
-        assert not(self.prediction_root is not None and self.RANSACPose_root is not None)
-        if self.prediction_root is not None:
-            posepred = pickle.load(open(self.predPosepath_list[index], "rb"))
-        elif self.RANSACPose_root is not None:
-            posepred = pickle.load(open(self.RANSACPose_list[index], "rb"))
-        else:
-            posepred = None
+        posepred = pickle.load(open(self.RANSACPose_list[index], "rb"))
 
         inspred, posepred = self.pad_clip_ins(insmap=inspred, posepred=posepred)
-
-        if not hasattr(self, 'deepv2dpred_root'):
-            self.deepv2dpred_root = None
-
-        if self.deepv2dpred_root is not None:
-            depthpred_deepv2d = np.array(Image.open(self.deepv2dpredpath_list[index])).astype(np.float32) / 256.0
-            posepred_deepv2d = read_deepv2d_pose(self.deepv2dpredpose_list[index])
-        else:
-            depthpred_deepv2d = None
-            posepred_deepv2d = None
 
         if self.mdPred_root is not None:
             mdDepth_pred = np.array(Image.open(self.mdDepthpath_list[index])).astype(np.float32) / 256.0
         else:
             mdDepth_pred = None
 
-        if self.flowPred_root is not None:
-            flowpred_RAFT, valid_flow = readFlowKITTI(self.flowpredpath_list[index])
-        else:
-            flowpred_RAFT = None
+        img1, img2, depth, depthvls, mdDepth_pred, inspred, intrinsic = self.aug_crop(img1, img2, depth, depthvls, mdDepth_pred, inspred, intrinsic)
 
-        img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, mdDepth_pred, inspred, flowpred_RAFT, intrinsic = self.aug_crop(img1, img2, depth, depthvls, depthpred, depthpred_deepv2d, mdDepth_pred, inspred, flowpred_RAFT, intrinsic)
-
-        flowgt = self.get_gt_flow(depth=depth, valid=(inspred==0) * (depth>0), intrinsic=intrinsic, rel_pose=rel_pose)
-        flowgt_vls = self.get_gt_flow(depth=depthvls, valid=(inspred==0) * (depthvls>0), intrinsic=intrinsic, rel_pose=rel_pose)
         if self.istrain and not self.muteaug:
             img1, img2 = self.colorjitter(img1, img2)
 
-        data_blob = self.wrapup(img1=img1, img2=img2, flowgt=flowgt, flowgt_vls=flowgt_vls, depthmap=depth, depthvls=depthvls, depthpred=depthpred,
-                                depthpred_deepv2d=depthpred_deepv2d, mdDepth_pred=mdDepth_pred, intrinsic=intrinsic, insmap=inspred, flowpred=flowpred_RAFT, rel_pose=rel_pose, posepred=posepred, posepred_deepv2d=posepred_deepv2d, tag=self.entries[index])
+        data_blob = self.wrapup(img1=img1, img2=img2, depthmap=depth, depthvls=depthvls, mdDepth_pred=mdDepth_pred, intrinsic=intrinsic, insmap=inspred, rel_pose=rel_pose, posepred=posepred, tag=self.entries[index])
         return data_blob
 
     def pad_clip_ins(self, insmap, posepred):
@@ -381,11 +322,9 @@ class KITTI_eigen(data.Dataset):
 
         return insmap, posepred_pad
 
-    def wrapup(self, img1, img2, flowgt, flowgt_vls, depthmap, depthvls, depthpred, depthpred_deepv2d, mdDepth_pred, intrinsic, insmap, flowpred, rel_pose, posepred, posepred_deepv2d, tag):
+    def wrapup(self, img1, img2, depthmap, depthvls, mdDepth_pred, intrinsic, insmap, rel_pose, posepred, tag):
         img1 = torch.from_numpy(img1).permute([2, 0, 1]).float()
         img2 = torch.from_numpy(img2).permute([2, 0, 1]).float()
-        flowgt = torch.from_numpy(flowgt).permute([2, 0, 1]).float()
-        flowgt_vls = torch.from_numpy(flowgt_vls).permute([2, 0, 1]).float()
         depthmap = torch.from_numpy(depthmap).unsqueeze(0).float()
         depthvls = torch.from_numpy(depthvls).unsqueeze(0).float()
 
@@ -397,8 +336,6 @@ class KITTI_eigen(data.Dataset):
         data_blob = dict()
         data_blob['img1'] = img1
         data_blob['img2'] = img2
-        data_blob['flowgt'] = flowgt
-        data_blob['flowgt_vls'] = flowgt_vls
         data_blob['depthmap'] = depthmap
         data_blob['depthvls'] = depthvls
         data_blob['intrinsic'] = intrinsic
@@ -407,25 +344,9 @@ class KITTI_eigen(data.Dataset):
         data_blob['posepred'] = posepred
         data_blob['tag'] = tag
 
-        if depthpred is not None:
-            depthpred = torch.from_numpy(depthpred).unsqueeze(0).float()
-            data_blob['depthpred'] = depthpred
-
-        if depthpred_deepv2d is not None:
-            depthpred_deepv2d = torch.from_numpy(depthpred_deepv2d).unsqueeze(0).float()
-            data_blob['depthpred_deepv2d'] = depthpred_deepv2d
-
         if mdDepth_pred is not None:
             mdDepth_pred = torch.from_numpy(mdDepth_pred).unsqueeze(0).float()
             data_blob['mdDepth_pred'] = mdDepth_pred
-
-        if posepred_deepv2d is not None:
-            posepred_deepv2d = torch.from_numpy(posepred_deepv2d).unsqueeze(0).float()
-            data_blob['posepred_deepv2d'] = posepred_deepv2d
-
-        if flowpred is not None:
-            flowpred = torch.from_numpy(flowpred).permute([2, 0, 1]).float()
-            data_blob['flowpred'] = flowpred
 
         return data_blob
 
@@ -433,7 +354,7 @@ class KITTI_eigen(data.Dataset):
         img_cropped = img[top:top+crph, left:left+crpw]
         return img_cropped
 
-    def aug_crop(self, img1, img2, depthmap, depthvls, depthpred, depthpred_deepv2d, mdDepth_pred, instancemap, flowpred_RAFT, intrinsic):
+    def aug_crop(self, img1, img2, depthmap, depthvls, mdDepth_pred, instancemap, intrinsic):
         if img1.ndim == 3:
             h, w, _ = img1.shape
         else:
@@ -469,18 +390,10 @@ class KITTI_eigen(data.Dataset):
         depthmap = self.crop_img(depthmap, left=left, top=top, crph=crph, crpw=crpw)
         depthvls = self.crop_img(depthvls, left=left, top=top, crph=crph, crpw=crpw)
         instancemap = self.crop_img(instancemap, left=left, top=top, crph=crph, crpw=crpw)
-        if self.baninsmap:
-            instancemap = instancemap * 0
-        if depthpred is not None:
-            depthpred = self.crop_img(depthpred, left=left, top=top, crph=crph, crpw=crpw)
-        if depthpred_deepv2d is not None:
-            depthpred_deepv2d = self.crop_img(depthpred_deepv2d, left=left, top=top, crph=crph, crpw=crpw)
         if mdDepth_pred is not None:
             mdDepth_pred = self.crop_img(mdDepth_pred, left=left, top=top, crph=crph, crpw=crpw)
-        if flowpred_RAFT is not None:
-            flowpred_RAFT = self.crop_img(flowpred_RAFT, left=left, top=top, crph=crph, crpw=crpw)
 
-        return img1, img2, depthmap, depthvls, depthpred, depthpred_deepv2d, mdDepth_pred, instancemap, flowpred_RAFT, intrinsic
+        return img1, img2, depthmap, depthvls, mdDepth_pred, instancemap, intrinsic
 
     def get_gt_flow(self, depth, valid, intrinsic, rel_pose):
         h, w = depth.shape

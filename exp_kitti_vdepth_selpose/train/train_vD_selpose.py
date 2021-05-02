@@ -22,8 +22,8 @@ import torch.nn.functional as F
 import time
 
 from torch.utils.data import DataLoader
-from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
-from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scale_initialD import EppFlowNet
+from exp_kitti_vdepth_selpose.dataset_kitti_eigen_fixation import KITTI_eigen
+from exp_kitti_vdepth_selpose.eppflowenet.EppFlowNet_scale_initialD import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -428,14 +428,14 @@ def train(gpu, ngpus_per_node, args):
     train_entries, evaluation_entries = read_splits()
 
     train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum,
-                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
-                                RANSACPose_root=args.RANSACPose_root, istrain=True, muteaug=False, banremovedup=False, isgarg=False, baninsmap=args.baninsmap)
+                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+                                RANSACPose_root=args.RANSACPose_root, istrain=True, muteaug=False, banremovedup=False, isgarg=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
-                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
-                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True, baninsmap=args.baninsmap)
+                               depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
@@ -565,7 +565,7 @@ if __name__ == '__main__':
                         help='lambda in paper: [0, 1], higher value more focus on minimizing variance of error',
                         default=0.85)
     parser.add_argument('--maxlogscale', type=float, default=1.5)
-    parser.add_argument('--baninsmap', action='store_true')
+
 
     parser.add_argument('--tscale_range', type=float, default=3)
     parser.add_argument('--objtscale_range', type=float, default=10)
