@@ -327,7 +327,6 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
         ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
         scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
         mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
-        tag = data_blob['tag'][0]
 
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
         posepred = posepred[:, :, 0]
@@ -336,11 +335,13 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
         mvd_decps_pad = mvd_decps_pad[:, :, 0]
 
         outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-        posepred = outputs[('afft_all', 2)][:, -1]
 
-        seq = tag.split(' ')[0].split('/')[1][0:21]
-        frmid = int(tag.split(' ')[1]) - int(seqmap[seq]['stid'])
-        pred_pose_recs[seq][frmid] = posepred
+        for k in range(len(data_blob['tag'])):
+            posepred = outputs[('afft_all', 2)][k, -1]
+            tag = data_blob['tag'][k]
+            seq = tag.split(' ')[0].split('/')[1][0:21]
+            frmid = int(tag.split(' ')[1]) - int(seqmap[seq]['stid'])
+            pred_pose_recs[seq][frmid] = posepred
 
     for k in seqmap.keys():
         dist.all_reduce(tensor=pred_pose_recs[k], op=dist.ReduceOp.SUM, group=group)
@@ -629,7 +630,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries[stidx : edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
                               depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=4, pin_memory=True, num_workers=3, drop_last=False)
 
     print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
 
