@@ -377,12 +377,15 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
             intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
 
             positions_odom = list()
+            scale_odom = list()
             stpos = np.array([[0, 0, 0, 1]]).T
             accumP = np.eye(4)
             for r in relposes:
                 accumP = r @ accumP
                 positions_odom.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+                scale_odom.append(np.sqrt(np.sum(r[0:3, 3])))
             positions_odom = np.array(positions_odom)
+            scale_odom = np.array(scale_odom)
 
             positions_pred = list()
             stpos = np.array([[0, 0, 0, 1]]).T

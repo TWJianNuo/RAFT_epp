@@ -350,6 +350,7 @@ if __name__ == '__main__':
     tot_err['positions_RANSAC'] = 0
     tot_err['positions_Deepv2d'] = 0
     tot_err['positions_RANSAC_Deepv2dscale'] = 0
+    tot_err['positions_RANSAC_Odomscale'] = 0
 
     for s in seqmap.keys():
         posrec = dict()
@@ -394,36 +395,48 @@ if __name__ == '__main__':
         intrinsic, extrinsic = get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam)
 
         positions_odom = list()
+        scale_odom = list()
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
         for r in relposes:
             accumP = r @ accumP
             positions_odom.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            scale_odom.append(np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10))
         positions_odom = np.array(positions_odom)
+        scale_odom = np.array(scale_odom)
 
         positions_pred = list()
+        scale_pred = list()
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
         for p in pred_poses:
             accumP = p @ accumP
             positions_pred.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            scale_pred.append(np.sqrt(np.sum(p[0:3, 3] ** 2) + 1e-10))
         positions_pred = np.array(positions_pred)
+        scale_pred = np.array(scale_pred)
 
         positions_RANSAC = list()
+        scale_RANSAC = list()
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
         for r in RANSAC_poses:
             accumP = r @ accumP
             positions_RANSAC.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            scale_RANSAC.append(np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10))
         positions_RANSAC = np.array(positions_RANSAC)
+        scale_RANSAC = np.array(scale_RANSAC)
 
         positions_Deepv2d = list()
+        scale_Deepv2d = list()
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
         for d in Deepv2d_poses:
             accumP = d @ accumP
             positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+            scale_Deepv2d.append(np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10))
         positions_Deepv2d = np.array(positions_Deepv2d)
+        scale_Deepv2d = np.array(scale_Deepv2d)
 
         positions_RANSAC_Deepv2dscale = list()
         stpos = np.array([[0, 0, 0, 1]]).T
@@ -435,17 +448,38 @@ if __name__ == '__main__':
             positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
         positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
 
+        positions_RANSAC_Odomscale = list()
+        stpos = np.array([[0, 0, 0, 1]]).T
+        accumP = np.eye(4)
+        for i, r in enumerate(RANSAC_poses):
+            r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(np.sum(relposes[i][0:3, 3] ** 2) + 1e-10)
+            accumP = r @ accumP
+            positions_RANSAC_Odomscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
+        positions_RANSAC_Odomscale = np.array(positions_RANSAC_Odomscale)
+
         posrec['positions_pred'] = positions_pred
         posrec['positions_RANSAC'] = positions_RANSAC
         posrec['positions_Deepv2d'] = positions_Deepv2d
         posrec['positions_RANSAC_Deepv2dscale'] = positions_RANSAC_Deepv2dscale
+        posrec['positions_RANSAC_Odomscale'] = positions_RANSAC_Odomscale
+
+        scalerec = dict()
+        scalerec['scale_pred'] = scale_pred
+        scalerec['scale_RANSAC'] = scale_RANSAC
+        scalerec['scale_Deepv2d'] = scale_Deepv2d
 
         print("============= %s ============" % (s))
         print("In total %d images," % positions_odom.shape[0])
         for k in posrec.keys():
-            err = np.mean(np.sqrt(np.sum((posrec[k] - positions_odom) ** 2, axis=1)))
-            tot_err[k] += err * len(pred_poses)
-            print("%s, err: %f" % (k, err.item()))
+            err_odom = np.mean(np.sqrt(np.sum((posrec[k] - positions_odom) ** 2, axis=1)))
+
+            if 'scale_{}'.format(k.split('_')[1]) in scalerec.keys():
+                err_scale = np.mean(np.abs(scalerec['scale_{}'.format(k.split('_')[1])] - scale_odom))
+            else:
+                err_scale = np.nan
+
+            tot_err[k] += err_odom * len(pred_poses)
+            print("%s, err_odom: %f, err_scale: %f" % (k, err_odom.item(), err_scale.item()))
 
         vls_fold = os.path.join(pred_pose_root, 'vls')
         os.makedirs(vls_fold, exist_ok=True)
