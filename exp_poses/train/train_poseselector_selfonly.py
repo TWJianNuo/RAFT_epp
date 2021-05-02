@@ -492,9 +492,13 @@ class silog_loss(nn.Module):
         d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
-def read_odomeval_splits():
-    seqmapping = \
-    ['00 2011_10_03_drive_0027 000000 004540']
+def read_odomeval_splits(ngpus_per_node):
+    if ngpus_per_node >=4 :
+        seqmapping = \
+        ['00 2011_10_03_drive_0027 000000 004540']
+    else:
+        seqmapping = \
+        ['05 2011_09_30_drive_0018 000000 002760']
 
     # seqmapping = \
     # ["04 2011_09_30_drive_0016 000000 000270"]
@@ -514,10 +518,10 @@ def read_odomeval_splits():
     entries.sort()
     return entries, seqmap
 
-def read_splits():
+def read_splits(ngpus_per_node):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    evaluation_entries, seqmap = read_odomeval_splits()
+    evaluation_entries, seqmap = read_odomeval_splits(ngpus_per_node)
     return train_entries, evaluation_entries, seqmap
 
 def get_reprojection_loss(img1, outputs, ssim, args):
@@ -609,7 +613,7 @@ def train(gpu, ngpus_per_node, args):
 
     model.train()
 
-    train_entries, evaluation_entries, seqmap = read_splits()
+    train_entries, evaluation_entries, seqmap = read_splits(ngpus_per_node)
 
     interval = np.floor(len(evaluation_entries) / ngpus_per_node).astype(np.int).item()
     if args.gpu == ngpus_per_node - 1:
