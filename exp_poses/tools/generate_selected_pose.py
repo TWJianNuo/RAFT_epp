@@ -433,7 +433,8 @@ if __name__ == '__main__':
         scale_Deepv2d = list()
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
-        for d in Deepv2d_poses:
+        for i, d in enumerate(Deepv2d_poses):
+            # d[0:3, 3] = d[0:3, 3] / np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10) * np.sqrt(np.sum(relposes[i][0:3, 3] ** 2) + 1e-10)
             accumP = d @ accumP
             positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
             scale_Deepv2d.append(np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10))
@@ -444,8 +445,7 @@ if __name__ == '__main__':
         stpos = np.array([[0, 0, 0, 1]]).T
         accumP = np.eye(4)
         for i, r in enumerate(RANSAC_poses):
-            r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(
-                np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
+            r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
             accumP = r @ accumP
             positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
         positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
