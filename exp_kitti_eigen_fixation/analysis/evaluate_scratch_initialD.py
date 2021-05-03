@@ -167,7 +167,7 @@ def train(gpu, ngpus_per_node, args):
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, deepv2dpred_root=args.deepv2dpred_root,
-                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root)
+                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
 
@@ -209,6 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_layers', type=int, default=50)
     parser.add_argument('--num_deges', type=int, default=32)
     parser.add_argument('--maxlogscale', type=float, default=1.5)
+    parser.add_argument('--baninsmap', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
