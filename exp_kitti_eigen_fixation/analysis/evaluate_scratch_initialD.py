@@ -91,6 +91,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         else:
             depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
             predread = depthpred_deepv2d
+            # predread = data_blob['mdDepth_pred'].cuda(gpu)
         selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval)).float()
         predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
