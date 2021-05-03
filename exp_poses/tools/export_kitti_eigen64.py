@@ -461,7 +461,7 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
             t = np.array([[0, 0, -1]]).T
             scale = 0
         else:
-            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(args.serverid * 128 * eval_loader.__len__() + iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
+            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
         self_pose = np.eye(4)
         self_pose[0:3, 0:3] = R
         self_pose[0:3, 3:4] = t * scale
@@ -542,9 +542,9 @@ def read_splits(args, it):
                 frmidx = png.split('/')[-1].split('.')[0]
                 entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
                 entries_expand.append(entry_expand)
-        return odom_entries + entries_expand + evaluation_entries
+        return list(set(odom_entries + entries_expand + evaluation_entries))
     else:
-        return train_entries
+        return list(set(train_entries))
 
 def train(processid, args, entries, iters=0):
     interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
@@ -645,10 +645,10 @@ if __name__ == '__main__':
     parser.add_argument('--ban_odometry', action='store_true')
     parser.add_argument('--samplenum', type=int, default=50000)
     parser.add_argument('--nprocs', type=int, default=6)
-    parser.add_argument('--serverid', type=int, default=0)
     parser.add_argument('--export_first_it', action='store_true')
     parser.add_argument('--delay', type=int, default=0)
     parser.add_argument('--stid', type=int, default=1)
+    parser.add_argument('--edid', type=int, default=1)
     parser.add_argument('--evalonly', action='store_true')
     parser.add_argument('--skipexist', action='store_true')
     args = parser.parse_args()
@@ -663,16 +663,11 @@ if __name__ == '__main__':
         seqmap, oval_entries = generate_seqmapping()
         eval_generated_odom(args, seqmap, oval_entries, k)
     else:
-        if args.export_first_it:
-            k = 0
+        for k in range(args.stid, args.edid):
             print("Start Iteration %d" % (k))
             entries = read_splits(args, it=k)
             mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
 
-            seqmap, oval_entries = generate_seqmapping()
-            eval_generated_odom(args, seqmap, oval_entries, k)
-        else:
-            for k in range(args.stid, 64):
-                print("Start Iteration %d" % (k))
-                entries = read_splits(args, it=k)
-                mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+            if k < 4:
+                seqmap, oval_entries = generate_seqmapping()
+                eval_generated_odom(args, seqmap, oval_entries, k)
