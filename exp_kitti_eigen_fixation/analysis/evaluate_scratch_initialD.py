@@ -77,7 +77,6 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         insmap = data_blob['insmap'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
-        depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
 
         if not args.initbymD:
             mD_pred = data_blob['depthpred'].cuda(gpu)
@@ -90,8 +89,9 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
             predread = outputs[('depth', 2)]
         else:
+            depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
             predread = depthpred_deepv2d
-        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * (depthpred_deepv2d > 0)).float()
+        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval)).float()
         predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
