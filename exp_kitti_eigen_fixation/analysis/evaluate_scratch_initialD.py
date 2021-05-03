@@ -177,7 +177,7 @@ def train(gpu, ngpus_per_node, args):
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
     validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
-    validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
+    # validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
     return
 
 
