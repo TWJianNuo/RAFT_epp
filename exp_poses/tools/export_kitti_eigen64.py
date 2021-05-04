@@ -453,9 +453,6 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         os.makedirs(exportfold, exist_ok=True)
         export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
 
-        if args.skipexist and os.path.exists(export_root):
-            continue
-
         if torch.sum(torch.abs(data_blob['img1'] - data_blob['img2'])) < 1:
             R = np.eye(3)
             t = np.array([[0, 0, -1]]).T
@@ -542,9 +539,23 @@ def read_splits(args, it):
                 frmidx = png.split('/')[-1].split('.')[0]
                 entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
                 entries_expand.append(entry_expand)
-        return list(set(odom_entries + entries_expand + evaluation_entries))
+        totentries = list(set(odom_entries + entries_expand + evaluation_entries))
     else:
-        return list(set(train_entries))
+        totentries = list(set(train_entries))
+
+    if args.skipexist:
+        exportentries = list()
+        for e in totentries:
+            seq, frmidx, _ = e.split(' ')
+            exportfold = os.path.join(args.export_root, str(it).zfill(3), seq, 'image_02')
+            export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
+            if not os.path.exists(export_root):
+                exportentries.append(e)
+    else:
+        exportentries = totentries
+
+    return exportentries
+
 
 def train(processid, args, entries, iters=0):
     interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
@@ -666,6 +677,8 @@ if __name__ == '__main__':
         for k in range(args.stid, args.edid):
             print("Start Iteration %d" % (k))
             entries = read_splits(args, it=k)
+            if len(entries) == 0:
+                continue
             mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
 
             if k < 4:
