@@ -104,7 +104,10 @@ class KITTI_eigen(data.Dataset):
         self.entries = list()
 
         for entry in self.remove_dup(entries):
-            seq, index = entry.split(' ')
+            if len(entry.split(' ')) == 2:
+                seq, index = entry.split(' ')
+            else:
+                seq, index, _ = entry.split(' ')
             index = int(index)
 
             if os.path.exists(os.path.join(root, seq, 'image_02', 'data', "{}.png".format(str(index).zfill(10)))):
@@ -156,8 +159,8 @@ class KITTI_eigen(data.Dataset):
     def remove_dup(self, entries):
         dupentry = list()
         for entry in entries:
-            seq, index, _ = entry.split(' ')
-            dupentry.append("{} {}".format(seq, index.zfill(10)))
+            seq, index, _, iters = entry.split(' ')
+            dupentry.append("{} {} {}".format(seq, index.zfill(10), iters.zfill(3)))
 
         removed = list(set(dupentry))
         removed.sort()
@@ -434,7 +437,7 @@ def compute_poseloss(poseest, posegt):
     return losst, lossang
 
 @torch.no_grad()
-def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False, samplenum=50000, iters=0):
+def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False, samplenum=50000):
     if bangrad:
         gradComputer = None
     else:
@@ -448,7 +451,8 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         pose_bs = data_blob['posepred_bs']
         tag = data_blob['tag'][0]
 
-        seq, frmidx = tag.split(' ')
+        seq, frmidx, iters = tag.split(' ')
+        iters = int(iters)
         exportfold = os.path.join(args.export_root, str(iters).zfill(3), seq, 'image_02')
         os.makedirs(exportfold, exist_ok=True)
         export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
@@ -518,62 +522,66 @@ def read_splits(args, it):
     else:
         return train_entries + evaluation_entries + odom_entries
 
-def read_splits(args, it):
+def read_splits(args):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    if it < 4:
-        entries = train_entries
-        folds = list()
-        for entry in entries:
-            seq, idx, _ = entry.split(' ')
-            folds.append(seq)
-        folds = list(set(folds))
+    # Case for it < 4
+    entries = train_entries
+    folds = list()
+    for entry in entries:
+        seq, idx, _ = entry.split(' ')
+        folds.append(seq)
+    folds = list(set(folds))
 
-        entries_expand = list()
-        for fold in folds:
-            pngs = glob.glob(os.path.join(args.dataset_root, fold, 'image_02/data/*.png'))
-            for png in pngs:
-                frmidx = png.split('/')[-1].split('.')[0]
-                entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
-                entries_expand.append(entry_expand)
-        totentries = list(set(odom_entries + entries_expand + evaluation_entries))
-    else:
-        totentries = list(set(train_entries))
-
-    if args.skipexist:
-        exportentries = list()
-        for e in totentries:
-            seq, frmidx, _ = e.split(' ')
+    entries_expand = list()
+    for fold in folds:
+        pngs = glob.glob(os.path.join(args.dataset_root, fold, 'image_02/data/*.png'))
+        for png in pngs:
+            frmidx = png.split('/')[-1].split('.')[0]
+            entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
+            entries_expand.append(entry_expand)
+    totentries = list(set(odom_entries + entries_expand + evaluation_entries))
+    exportentries = list()
+    for e in totentries:
+        seq, frmidx, _ = e.split(' ')
+        pred_poses = list()
+        for it in range(4):
             exportfold = os.path.join(args.export_root, str(it).zfill(3), seq, 'image_02')
             export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
-            try:
-                pred_pose = pickle.load(open(export_root, "rb"))
-                if pred_pose.shape[0] < 1 or np.ndim(pred_pose) != 3:
-                    exportentries.append(e)
-            except:
-                exportentries.append(e)
-    else:
-        exportentries = totentries
+            pred_pose = pickle.load(open(export_root, "rb"))
+            pred_poses.append(pred_pose)
+        try:
+            pred_poses = np.stack(pred_poses, axis=0)
+        except:
+            for itt in range(4):
+                exportentries.append(e + ' {}'.format(str(itt).zfill(3)))
+
+    totentries = list(set(train_entries))
+    for e in totentries:
+        seq, frmidx, _ = e.split(' ')
+        pred_poses = list()
+        for it in range(4, 64):
+            exportfold = os.path.join(args.export_root, str(it).zfill(3), seq, 'image_02')
+            export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
+            pred_pose = pickle.load(open(export_root, "rb"))
+            pred_poses.append(pred_pose)
+        try:
+            pred_poses = np.stack(pred_poses, axis=0)
+        except:
+            for itt in range(4, 64):
+                exportentries.append(e + ' {}'.format(str(itt).zfill(3)))
 
     return exportentries
 
 
-def train(processid, args, entries, iters=0):
-    interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
-    if processid == args.nprocs - 1:
-        stidx = int(interval * processid)
-        edidx = len(entries)
-    else:
-        stidx = int(interval * processid)
-        edidx = int(interval * (processid + 1))
-
-    eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root,
+def train(args, entries):
+    eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries,  flowPred_root=args.flowPred_root,
                                mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
-    validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum, iters=iters)
+    validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum)
     return
 
 def eval_generated_odom(args, seqmap, entries, repeats=64):
@@ -673,18 +681,13 @@ if __name__ == '__main__':
 
     time.sleep(args.delay)
 
-    if args.evalonly:
-        k = 0
-        seqmap, oval_entries = generate_seqmapping()
-        eval_generated_odom(args, seqmap, oval_entries, k)
+    entries = read_splits(args)
+    if len(entries) > 0:
+        train(args, entries)
+        entries = read_splits(args)
+        if len(entries) == 0:
+            print("FIx completed!")
+        else:
+            print("Err still exist!")
     else:
-        for k in range(args.stid, args.edid):
-            print("Start Iteration %d" % (k))
-            entries = read_splits(args, it=k)
-            if len(entries) == 0:
-                continue
-            mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
-
-            if k < 4:
-                seqmap, oval_entries = generate_seqmapping()
-                eval_generated_odom(args, seqmap, oval_entries, k)
+        print("No issue Found")
