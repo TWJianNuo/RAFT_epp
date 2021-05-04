@@ -634,7 +634,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries[stidx : edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
                               depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
-    eval_loader = data.DataLoader(eval_dataset, batch_size=4, pin_memory=True, num_workers=3, drop_last=False)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=2, pin_memory=True, num_workers=3, drop_last=False)
 
     print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
 
