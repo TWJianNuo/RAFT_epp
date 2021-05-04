@@ -544,7 +544,7 @@ def get_scale_loss(outputs, gpsscale):
     scaleloss = 0
     for k in range(1, 3, 1):
         scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(1).unsqueeze(1) - scale_pred)
+        scaleloss += torch.abs(gpsscale.unsqueeze(1).unsqueeze(1) - scale_pred).mean()
     scaleloss = scaleloss / 2
     return scaleloss
 
