@@ -461,7 +461,9 @@ def read_splits():
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     val_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'val_files.txt'), 'r')]
     test_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
-    return train_entries
+
+    _, odomentries = generate_seqmapping()
+    return odomentries
 
 def get_imu_coord(root, seq, index):
     scale = latToScale(read_into_numbers(os.path.join(root, seq, 'oxts/data', "{}.txt".format(str(0).zfill(10))))[0])
@@ -473,7 +475,7 @@ def get_imu_coord(root, seq, index):
 
 def get_reldepth_binrange(depthnp_relfs, binnum=8):
     manual_l = -0.39772
-    mannual_r = 0.245844
+    mannual_r = 0.5731
 
     depthnp_relfs_sorted = np.sort(depthnp_relfs)
     stpos = np.argmin(np.abs(depthnp_relfs_sorted - manual_l)) / depthnp_relfs_sorted.shape[0]
@@ -555,14 +557,15 @@ if __name__ == '__main__':
         plt.close()
 
         if rp.split('/')[-1] == '000':
-            sampled_depth = get_reldepth_binrange(diff, binnum=args.binnum)
-            fig = plt.figure()
-            plt.hist(diff, bins=200, range=(-3, 3))
-            plt.vlines(sampled_depth, ymin=-100, ymax=100)
-            plt.savefig(os.path.join(args.vlsroot, 'binedges'))
-            plt.close()
+            for binnum in [8, 16, 32]:
+                sampled_depth = get_reldepth_binrange(diff, binnum=binnum)
+                fig = plt.figure()
+                plt.hist(diff, bins=200, range=(-3, 3))
+                plt.vlines(sampled_depth, ymin=-100, ymax=100)
+                plt.savefig(os.path.join(args.vlsroot, 'binedges'))
+                plt.close()
 
-            import pickle
-            pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/exp_poses/eppflownet/pose_bin{}.pickle".format(args.binnum), "wb"))
+                import pickle
+                pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/exp_poses/eppflownet/pose_bin{}.pickle".format(binnum), "wb"))
 
 

@@ -362,8 +362,7 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
 
             RANSAC_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02',
-                                                "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
 
@@ -549,11 +548,11 @@ def get_reprojection_loss(img1, outputs, ssim, args):
     rpjloss_fin = rpjloss_fin / 2
     return rpjloss_cale, rpjloss_fin
 
-def get_scale_loss(outputs, gpsscale):
+def get_scale_loss(outputs, gpsscale, num_angs):
     scaleloss = 0
     for k in range(1, 3, 1):
         scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(-1).unsqueeze(-1).expand([-1, 4, -1]) - scale_pred).mean()
+        scaleloss += torch.abs(gpsscale.unsqueeze(-1).unsqueeze(-1).expand([-1, num_angs, -1]) - scale_pred).mean()
     scaleloss = scaleloss / 2
     return scaleloss
 
@@ -608,8 +607,10 @@ def train(gpu, ngpus_per_node, args):
         checkpoint = torch.load(args.restore_ckpt, map_location=loc)
         model.load_state_dict(checkpoint, strict=False)
 
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin8.pickle'), 'rb') as f:
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin{}.pickle'.format(str(int(32 / args.num_angs)))), 'rb') as f:
         linlogdedge = pickle.load(f)
+    minidx = np.argmin(np.abs(linlogdedge))
+    print("Min index is :%d, val: %f" % (minidx, linlogdedge[minidx]))
 
     model.train()
 
@@ -682,12 +683,12 @@ def train(gpu, ngpus_per_node, args):
             scl_decps_pad = scl_decps_pad[:, :, 0]
             mvd_decps_pad = mvd_decps_pad[:, :, 0]
 
-            IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
-            leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
-            rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
-            IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
-            leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
-            rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
+            # IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
+            # leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
+            # rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
+            # IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
+            # leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
+            # rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
 
             gpsscale = torch.sqrt(torch.sum(rel_pose[:, 0:3, 3] ** 2, dim=1))
 
@@ -696,13 +697,12 @@ def train(gpu, ngpus_per_node, args):
             # tensor2disp(1/mD_pred_clipped, vmax=0.15, viewind=0).show()
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
             rpjloss_cale, rpjloss_fin = get_reprojection_loss(image1, outputs, ssim, args)
-            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
+            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs, num_angs=args.num_angs)
             # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
             seqloss = 0
 
             if args.enable_seqloss:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 + seqloss
-                print("111")
             elif args.enable_scalelossonly:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 * 0 + scaleloss
             else:
