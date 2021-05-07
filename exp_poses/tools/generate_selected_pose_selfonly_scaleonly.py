@@ -163,14 +163,14 @@ def validate_kitti(model, args, eval_loader):
 def get_odomentries(args):
     import glob
     odomentries = list()
-    # odomseqs = [
-    #     '2011_10_03/2011_10_03_drive_0027_sync',
-    #     '2011_09_30/2011_09_30_drive_0016_sync',
-    #     '2011_09_30/2011_09_30_drive_0018_sync',
-    #     '2011_09_30/2011_09_30_drive_0027_sync'
-    # ]
-    odomseqs = \
-    ['2011_09_30/2011_09_30_drive_0016_sync']
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_09_30/2011_09_30_drive_0016_sync',
+        '2011_09_30/2011_09_30_drive_0018_sync',
+        '2011_09_30/2011_09_30_drive_0027_sync'
+    ]
+    # odomseqs = \
+    # ['2011_09_30/2011_09_30_drive_0016_sync']
     for odomseq in odomseqs:
         leftimgs = glob.glob(os.path.join(args.odomroot, odomseq, 'image_02/data', "*.png"))
         for leftimg in leftimgs:
@@ -214,14 +214,14 @@ def read_splits(args):
     return ungenerated_entries
 
 def read_odomeval_splits():
-    # seqmapping = \
-    # ['00 2011_10_03_drive_0027 000000 004540',
-    #  "04 2011_09_30_drive_0016 000000 000270",
-    #  "05 2011_09_30_drive_0018 000000 002760",
-    #  "07 2011_09_30_drive_0027 000000 001100"]
-
     seqmapping = \
-    ["04 2011_09_30_drive_0016 000000 000270"]
+    ['00 2011_10_03_drive_0027 000000 004540',
+     "04 2011_09_30_drive_0016 000000 000270",
+     "05 2011_09_30_drive_0018 000000 002760",
+     "07 2011_09_30_drive_0027 000000 001100"]
+
+    # seqmapping = \
+    # ["04 2011_09_30_drive_0016 000000 000270"]
 
     entries = list()
     seqmap = dict()
