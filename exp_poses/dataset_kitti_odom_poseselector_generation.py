@@ -326,6 +326,8 @@ class KITTI_odom(data.Dataset):
             np.random.seed(index + int(time.time()))
             if self.num_samples == 1:
                 rep_idces = [0]
+            elif self.num_samples == 2:
+                rep_idces = [0, 1]
             else:
                 rep_idces = [0, 1, 2, 3]
             # rep_idces = [0, 0, 0, 0]
