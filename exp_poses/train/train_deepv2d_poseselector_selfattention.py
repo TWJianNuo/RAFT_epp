@@ -25,7 +25,7 @@ import time
 from torch.utils.data import DataLoader
 from exp_poses.dataset_kitti_eigen_poseselector import KITTI_eigen
 from exp_poses.dataset_kitti_odom_poseselector import KITTI_odom
-from exp_poses.eppflownet.EppFlowNet_poseselector import EppFlowNet
+from exp_poses.eppflownet.EppflowNet_poseselector_selfattention import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
 import torch.utils.data as data
@@ -168,17 +168,18 @@ class Logger:
 
         depthpredvls = tensor2disp(1 / data_blob['mdDepth_pred'], vmax=0.15, viewind=0)
         imgrecon = tensor2rgb(outputs[('img1_recon', 2)][:, -1], viewind=0)
+        attentionmap = tensor2disp(outputs['attention'], percentile=95, viewind=0)
 
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
-        img_val_mid = np.concatenate([np.array(depthpredvls), np.array(imgrecon)], axis=1)
+        img_val_mid = np.concatenate([np.array(depthpredvls), np.array(attentionmap)], axis=1)
         img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
         X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], outputs)
         self.writer.add_image('X', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
 
-        X = self.vls_objmvment(np.array(insvls), data_blob['insmap'], data_blob['posepred'])
-        self.writer.add_image('objmvment', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
+        # X = self.vls_objmvment(np.array(insvls), data_blob['insmap'], data_blob['posepred'])
+        # self.writer.add_image('objmvment', (torch.from_numpy(X).float() / 255).permute([2, 0, 1]), step)
 
     def vls_sampling(self, img1, img2, depth, outputs):
         depth_np = depth[0].squeeze().cpu().numpy()
@@ -327,16 +328,21 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
         ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
         scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
         mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
-        tag = data_blob['tag'][0]
 
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
+        posepred = posepred[:, :, 0]
+        ang_decps_pad = ang_decps_pad[:, :, 0]
+        scl_decps_pad = scl_decps_pad[:, :, 0]
+        mvd_decps_pad = mvd_decps_pad[:, :, 0]
 
         outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-        posepred = outputs[('afft_all', 2)][:, -1, 0]
 
-        seq = tag.split(' ')[0].split('/')[1][0:21]
-        frmid = int(tag.split(' ')[1]) - int(seqmap[seq]['stid'])
-        pred_pose_recs[seq][frmid] = posepred
+        for k in range(len(data_blob['tag'])):
+            posepred = outputs[('afft_all', 2)][k, -1]
+            tag = data_blob['tag'][k]
+            seq = tag.split(' ')[0].split('/')[1][0:21]
+            frmid = int(tag.split(' ')[1]) - int(seqmap[seq]['stid'])
+            pred_pose_recs[seq][frmid] = posepred
 
     for k in seqmap.keys():
         dist.all_reduce(tensor=pred_pose_recs[k], op=dist.ReduceOp.SUM, group=group)
@@ -357,8 +363,7 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
 
             RANSAC_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02',
-                                                "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
 
@@ -487,9 +492,13 @@ class silog_loss(nn.Module):
         d = torch.log(depth_est[mask]) - torch.log(depth_gt[mask])
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
-def read_odomeval_splits():
-    seqmapping = \
-    ['00 2011_10_03_drive_0027 000000 004540']
+def read_odomeval_splits(ngpus_per_node):
+    if ngpus_per_node >=4 :
+        seqmapping = \
+        ['00 2011_10_03_drive_0027 000000 004540']
+    else:
+        seqmapping = \
+        ['05 2011_09_30_drive_0018 000000 002760']
 
     # seqmapping = \
     # ["04 2011_09_30_drive_0016 000000 000270"]
@@ -509,10 +518,11 @@ def read_odomeval_splits():
     entries.sort()
     return entries, seqmap
 
-def read_splits():
+def read_splits(ngpus_per_node):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    evaluation_entries, seqmap = read_odomeval_splits()
+    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
+    evaluation_entries, seqmap = read_odomeval_splits(ngpus_per_node)
     return train_entries, evaluation_entries, seqmap
 
 def get_reprojection_loss(img1, outputs, ssim, args):
@@ -540,11 +550,11 @@ def get_reprojection_loss(img1, outputs, ssim, args):
     rpjloss_fin = rpjloss_fin / 2
     return rpjloss_cale, rpjloss_fin
 
-def get_scale_loss(outputs, gpsscale):
+def get_scale_loss(outputs, gpsscale, num_angs):
     scaleloss = 0
     for k in range(1, 3, 1):
         scale_pred = outputs[('scale_adj', k)]
-        scaleloss += torch.abs(gpsscale.unsqueeze(1).expand([-1, 4]) - scale_pred[:, :, 0, 0]).mean()
+        scaleloss += torch.abs(gpsscale.unsqueeze(-1).unsqueeze(-1).expand([-1, num_angs, -1]) - scale_pred).mean()
     scaleloss = scaleloss / 2
     return scaleloss
 
@@ -606,7 +616,7 @@ def train(gpu, ngpus_per_node, args):
 
     model.train()
 
-    train_entries, evaluation_entries, seqmap = read_splits()
+    train_entries, evaluation_entries, seqmap = read_splits(ngpus_per_node)
 
     interval = np.floor(len(evaluation_entries) / ngpus_per_node).astype(np.int).item()
     if args.gpu == ngpus_per_node - 1:
@@ -627,7 +637,7 @@ def train(gpu, ngpus_per_node, args):
     eval_dataset = KITTI_odom(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries[stidx : edidx], maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
                               depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
                               RANSACPose_root=args.RANSACPose_root, istrain=False, isgarg=True)
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=2, pin_memory=True, num_workers=3, drop_last=False)
 
     print("Training splits contain %d images while test splits contain %d images" % (train_dataset.__len__(), eval_dataset.__len__()))
 
@@ -670,12 +680,17 @@ def train(gpu, ngpus_per_node, args):
             mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
             rel_pose = data_blob['rel_pose'].cuda(gpu)
 
-            IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
-            leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
-            rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
-            IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
-            leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
-            rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
+            posepred = posepred[:, :, 0]
+            ang_decps_pad = ang_decps_pad[:, :, 0]
+            scl_decps_pad = scl_decps_pad[:, :, 0]
+            mvd_decps_pad = mvd_decps_pad[:, :, 0]
+
+            # IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
+            # leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
+            # rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
+            # IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
+            # leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
+            # rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
 
             gpsscale = torch.sqrt(torch.sum(rel_pose[:, 0:3, 3] ** 2, dim=1))
 
@@ -684,16 +699,16 @@ def train(gpu, ngpus_per_node, args):
             # tensor2disp(1/mD_pred_clipped, vmax=0.15, viewind=0).show()
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
             rpjloss_cale, rpjloss_fin = get_reprojection_loss(image1, outputs, ssim, args)
-            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
-            seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
+            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs, num_angs=args.num_angs)
+            # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
+            seqloss = 0
 
             if args.enable_seqloss:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 + seqloss
-                print("111")
             elif args.enable_scalelossonly:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 * 0 + scaleloss
             else:
-                loss = (rpjloss_cale + rpjloss_fin) / 2 + scaleloss
+                loss = (rpjloss_cale + rpjloss_fin) / 2 * 0.1 + scaleloss
 
             metrics = dict()
             metrics['rpjloss_cale'] = rpjloss_cale.item()

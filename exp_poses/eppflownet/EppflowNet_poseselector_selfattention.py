@@ -228,6 +228,30 @@ class EppFlowNet_Encoder(nn.Module):
         x = self.convf(x)
         return x
 
+class Attentionhead(nn.Module):
+    def __init__(self, args):
+        super(Attentionhead, self).__init__()
+        self.bnrelu = BnRelu3d(48)
+        self.relu = nn.ReLU()
+        self.conv1 = nn.Conv3d(in_channels=48, out_channels=32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv3d(in_channels=32, out_channels=32, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv3d(in_channels=32, out_channels=1, kernel_size=1)
+        self.conv4 = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
+        self.args = args
+
+    def forward(self, x, mask):
+        _, _, _, featureh, featurew = x.shape
+        x = self.bnrelu(x)
+        x = self.relu(self.conv1(x))
+        x = self.relu(self.conv2(x))
+        x = self.relu(self.conv3(x).squeeze(1))
+        x = self.conv4(x)
+        x = F.interpolate(x, [int(featureh * 4), int(featurew * 4)], mode='bilinear', align_corners=False)
+        expx = torch.exp(x) * mask
+        attention = expx / torch.sum(expx, dim=[2, 3], keepdim=True).expand([-1, -1, int(featureh * 4), int(featurew * 4)])
+        return attention
+
 class Scalehead(nn.Module):
     def __init__(self, args):
         super(Scalehead, self).__init__()
@@ -303,18 +327,16 @@ class EppFlowNet(nn.Module):
     def __init__(self, args, minidx):
         super(EppFlowNet, self).__init__()
         self.args = args
-        self.minidx = minidx
         self.nedges = self.args.num_scales * self.args.num_angs
+        self.minidx = minidx
 
         self.encorder = EppFlowNet_Encoder()
         self.decoder = EppFlowNet_Decoder()
         self.scalehead = Scalehead(self.args)
         self.posehead = Relposehead(self.args)
+        self.attentionhead = Attentionhead(self.args)
 
         self.pts2ddict = dict()
-
-        self.eppinflate = eppcore_inflation.apply
-        self.eppcompress = eppcore_compression.apply
 
         self.init_ang2RM()
 
@@ -339,31 +361,31 @@ class EppFlowNet(nn.Module):
         ang2RMz[1, 1, 2] = 1
 
         expnum = int(self.args.num_angs + 1)
-        ang2RMx = ang2RMx.view([1, 1, 1, 3, 3, 1, 6]).expand([-1, expnum, self.args.maxinsnum, -1, -1, -1, -1])
+        ang2RMx = ang2RMx.view([1, 1, 3, 3, 1, 6]).expand([-1, expnum, -1, -1, -1, -1])
         self.ang2RMx = torch.nn.Parameter(ang2RMx, requires_grad=False)
-        ang2RMy = ang2RMy.view([1, 1, 1, 3, 3, 1, 6]).expand([1, expnum, self.args.maxinsnum, -1, -1, -1, -1])
+        ang2RMy = ang2RMy.view([1, 1, 3, 3, 1, 6]).expand([1, expnum, -1, -1, -1, -1])
         self.ang2RMy = torch.nn.Parameter(ang2RMy, requires_grad=False)
-        ang2RMz = ang2RMz.view([1, 1, 1, 3, 3, 1, 6]).expand([1, expnum, self.args.maxinsnum, -1, -1, -1, -1])
+        ang2RMz = ang2RMz.view([1, 1, 3, 3, 1, 6]).expand([1, expnum, -1, -1, -1, -1])
         self.ang2RMz = torch.nn.Parameter(ang2RMz, requires_grad=False)
 
         rotxcomp = torch.zeros([3, 3])
         rotxcomp[0, 0] = 1
-        rotxcomp = rotxcomp.view([1, 1, 1, 3, 3]).expand([1, expnum, self.args.maxinsnum, -1, -1])
+        rotxcomp = rotxcomp.view([1, 1, 3, 3]).expand([1, expnum, -1, -1])
         self.rotxcomp = torch.nn.Parameter(rotxcomp, requires_grad=False)
 
         rotycomp = torch.zeros([3, 3])
         rotycomp[1, 1] = 1
-        rotycomp = rotycomp.view([1, 1, 1, 3, 3]).expand([1, expnum, self.args.maxinsnum, -1, -1])
+        rotycomp = rotycomp.view([1, 1, 3, 3]).expand([1, expnum, -1, -1])
         self.rotycomp = torch.nn.Parameter(rotycomp, requires_grad=False)
 
         rotzcomp = torch.zeros([3, 3])
         rotzcomp[2, 2] = 1
-        rotzcomp = rotzcomp.view([1, 1, 1, 3, 3]).expand([1, expnum, self.args.maxinsnum, -1, -1])
+        rotzcomp = rotzcomp.view([1, 1, 3, 3]).expand([1, expnum, -1, -1])
         self.rotzcomp = torch.nn.Parameter(rotzcomp, requires_grad=False)
 
         lastrowpad = torch.zeros([1, 4])
         lastrowpad[0, 3] = 1
-        lastrowpad = lastrowpad.view([1, 1, 1, 1, 4]).expand([1, expnum, self.args.maxinsnum, -1, -1])
+        lastrowpad = lastrowpad.view([1, 1, 1, 4]).expand([1, expnum, -1, -1])
         self.lastrowpad = torch.nn.Parameter(lastrowpad, requires_grad=False)
 
     def ang2R(self, angs):
@@ -373,10 +395,10 @@ class EppFlowNet(nn.Module):
         """
         expnum = int(self.args.num_angs + 1)
         bz = angs.shape[0]
-        cos_sin = torch.cat([torch.cos(angs), torch.sin(angs)], dim=-1).view([bz, expnum, self.args.maxinsnum, 1, 1, 6, 1]).expand([-1, -1, -1, 3, 3, -1, -1])
-        rotx = (self.ang2RMx @ cos_sin).squeeze(-1).squeeze(-1) + self.rotxcomp.expand([bz, -1, -1, -1, -1])
-        roty = (self.ang2RMy @ cos_sin).squeeze(-1).squeeze(-1) + self.rotycomp.expand([bz, -1, -1, -1, -1])
-        rotz = (self.ang2RMz @ cos_sin).squeeze(-1).squeeze(-1) + self.rotzcomp.expand([bz, -1, -1, -1, -1])
+        cos_sin = torch.cat([torch.cos(angs), torch.sin(angs)], dim=-1).view([bz, expnum, 1, 1, 6, 1]).expand([-1, -1, 3, 3, -1, -1])
+        rotx = (self.ang2RMx @ cos_sin).squeeze(-1).squeeze(-1) + self.rotxcomp.expand([bz, -1, -1, -1])
+        roty = (self.ang2RMy @ cos_sin).squeeze(-1).squeeze(-1) + self.rotycomp.expand([bz, -1, -1, -1])
+        rotz = (self.ang2RMz @ cos_sin).squeeze(-1).squeeze(-1) + self.rotzcomp.expand([bz, -1, -1, -1])
         rot = rotz @ roty @ rotx
         return rot
 
@@ -396,11 +418,9 @@ class EppFlowNet(nn.Module):
         featurew = int(orgw / dsratio)
         bz = intrinsic.shape[0]
 
-        intrinsicex = intrinsic.unsqueeze(1).unsqueeze(1).expand([-1, self.nedges, self.args.maxinsnum, -1, -1])
+        intrinsicex = intrinsic.unsqueeze(1).expand([-1, self.nedges, -1, -1])
         projM = intrinsicex @ posepred @ torch.inverse(intrinsicex)
-        insmap_ex = insmap.expand([-1, self.nedges, -1, -1])
-        projMimg = self.eppinflate(insmap_ex.contiguous().view([-1, 1, orgh, orgw]).contiguous(), projM.view([-1, self.args.maxinsnum,  4, 4]).contiguous())
-        projMimg = projMimg.view([bz, self.nedges, orgh, orgw, 4, 4])
+        projMimg = projM.view([bz, self.nedges, 1, 1, 4, 4]).expand([bz, self.nedges, orgh, orgw, 4, 4])
 
         sample_depthmap = depthpred.expand([-1, self.nedges, -1, -1])
 
@@ -450,37 +470,33 @@ class EppFlowNet(nn.Module):
     def ang_t_to_aff(self, ang, t):
         rot = self.ang2R(ang)
         afft = torch.cat([rot, t.unsqueeze(-1)], dim=-1)
-        afft = torch.cat([afft, self.lastrowpad.expand([ang.shape[0], -1, -1, -1, -1])], dim=3)
+        afft = torch.cat([afft, self.lastrowpad.expand([ang.shape[0], -1, -1, -1])], dim=2)
         return afft
 
     def adjustpose(self, d_feature, angin, scalein, mvdin, insmap, inboundmask, orgh, orgw, k, posepred=None):
         bz = insmap.shape[0]
 
-        insmap_cp = torch.clone(insmap)
-        insmap_manip_selector = torch.ones_like(insmap)
-        insmap_manip_selector[:, :, int(0.25810811 * orgh): int(0.99189189 * orgh)] = 0
-        insmap_manip_selector[(insmap_cp == 0) * (inboundmask[:, self.minidx].unsqueeze(1) == 0)] = 1
-        insmap_manip_selector = insmap_manip_selector == 1
-        # from core.utils.utils import tensor2disp
-        # tensor2disp(insmap_manip_selector, viewind=0, vmax=1).show()
-        insmap_cp[insmap_manip_selector] = -1
-        insmap_num = self.eppcompress(insmap_cp, torch.ones([bz, orgh, orgw, 1, 1], dtype=torch.float, device=insmap.device), self.args.maxinsnum) + 1e-6
+        mask = torch.zeros_like(insmap, dtype=torch.float32)
+        mask[:, :, int(0.25810811 * orgh): int(0.99189189 * orgh)] = 1
+        mask = mask * inboundmask[:, self.minidx].unsqueeze(1)
+        attention = self.attentionhead(d_feature, mask)
+
+        # from core.utils.utils import tensor2disp, tensor2rgb
+        # tensor2disp(attention, percentile=95, viewind=0).show()
 
         rss = self.scalehead(d_feature)
-        rss = self.eppcompress(insmap_cp, rss.permute([0, 2, 3, 1]).unsqueeze(-1).contiguous(), self.args.maxinsnum) / insmap_num
-        rss = rss.permute([0, 2, 1, 3])
+        rss = torch.sum(rss * attention.expand([-1, self.args.num_angs, -1, -1]), dim=[2, 3]).unsqueeze(-1)
         scale_adj = scalein * torch.exp(rss)
 
-        rsa = self.posehead(d_feature)
-        rsa = self.eppcompress(insmap_cp, rsa.permute([0, 2, 3, 1]).unsqueeze(-1).contiguous(), self.args.maxinsnum) / insmap_num
-        rsa = rsa / (torch.sum(rsa, dim=[2], keepdim=True) + 1e-10)
-        rsa = rsa.permute([0, 2, 1, 3]).expand([-1, -1, -1, 3])
-
-        mvdout = scale_adj.expand([-1, -1, -1, 3]) * mvdin
+        mvdout = scale_adj.expand([-1, -1, 3]) * mvdin
         angout = angin
 
-        pred_mv = torch.sum(mvdout * rsa, dim=1, keepdim=True)
-        pred_ang = torch.sum(angout * rsa, dim=1, keepdim=True)
+        rsa = self.posehead(d_feature)
+        angout_weighted = torch.sum(angout.view([bz, self.args.num_angs, 3, 1, 1]).expand([-1, -1, -1, orgh, orgw]) * rsa.unsqueeze(2).expand([-1, -1, 3, -1, -1]), dim=1)
+        pred_ang = torch.sum(angout_weighted * attention.expand([-1, 3, -1, -1]), dim=[2, 3]).unsqueeze(1)
+
+        mvdout_weighted = torch.sum(mvdout.view([bz, self.args.num_angs, 3, 1, 1]).expand([-1, -1, -1, orgh, orgw]) * rsa.unsqueeze(2).expand([-1, -1, 3, -1, -1]), dim=1)
+        pred_mv = torch.sum(mvdout_weighted * attention.expand([-1, 3, -1, -1]), dim=[2, 3]).unsqueeze(1)
 
         afft_all = self.ang_t_to_aff(ang=torch.cat([angout, pred_ang], dim=1), t=torch.cat([mvdout, pred_mv], dim=1))
 
@@ -494,6 +510,7 @@ class EppFlowNet(nn.Module):
         outputs = dict()
         outputs[('afft_all', k)] = afft_all
         outputs[('scale_adj', k)] = scale_adj
+        outputs['attention'] = attention
         return outputs
 
     def forward(self, image1, image2, depthpred, intrinsic, posepred, angin, scalein, mvdin, insmap):
@@ -515,13 +532,6 @@ class EppFlowNet(nn.Module):
         outputs.update(self.adjustpose(d_feature2, angin, scalein, mvdin, insmap, inboundmask, orgh, orgw, k=2, posepred=posepred))
         outputs.update(self.depth2rgb(depthpred, image2, outputs, insmap, intrinsic, k=2))
         outputs['sample_pts'] = sample_pts
-        return outputs
-
-    def depth2rldepth(self, depthpred, objscale, insmap, outputs):
-        objscale_inf = self.eppinflate(insmap, objscale).squeeze(-1).squeeze(-1).unsqueeze(1)
-        for k in range(1, 3, 1):
-            outputs[('org_relativedepth', k)] = torch.log(depthpred + 1e-10) - objscale_inf
-            outputs[('relativedepth', k)] = outputs[('org_relativedepth', k)] + outputs[('residualdepth', k)]
         return outputs
 
     def depth2flow(self, depth, projMimg):
@@ -556,11 +566,9 @@ class EppFlowNet(nn.Module):
         pts3d = torch.stack([xx * depth, yy * depth, depth, ones], dim=-1).unsqueeze(-1).expand([-1, expnum, -1, -1, -1, -1])
         poses = outputs[('afft_all', k)]
 
-        intrinsicex = intrinsic.unsqueeze(1).unsqueeze(1).expand([-1, expnum, self.args.maxinsnum, -1, -1])
+        intrinsicex = intrinsic.unsqueeze(1).expand([-1, expnum, -1, -1])
         projM = intrinsicex @ poses @ torch.inverse(intrinsicex)
-        insmap_ex = insmap.expand([-1, expnum, -1, -1])
-        projMimg = self.eppinflate(insmap_ex.contiguous().view([-1, 1, orgh, orgw]).contiguous(), projM.view([-1, self.args.maxinsnum,  4, 4]).contiguous())
-        projMimg = projMimg.view([bz, expnum, orgh, orgw, 4, 4])
+        projMimg = projM.view([bz, expnum, 1, 1, 4, 4]).expand([bz, expnum, orgh, orgw, -1, -1])
 
         pts2dp = projMimg @ pts3d
 
