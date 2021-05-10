@@ -482,7 +482,7 @@ class EppFlowNet(nn.Module):
         attention = self.attentionhead(d_feature, mask)
 
         # from core.utils.utils import tensor2disp, tensor2rgb
-        # tensor2disp(attention, percentile=95, viewind=0).show()
+        # tensor2disp(attention, vmax=8.4811e-05, viewind=0).show()
 
         rss = self.scalehead(d_feature)
         rss = torch.sum(rss * attention.expand([-1, self.args.num_angs, -1, -1]), dim=[2, 3]).unsqueeze(-1)

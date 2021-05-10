@@ -698,7 +698,6 @@ def train(gpu, ngpus_per_node, args):
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
             rpjloss_cale, rpjloss_fin = get_reprojection_loss(image1, outputs, ssim, args)
             scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs, num_angs=args.num_angs)
-            # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
             seqloss = 0
 
             if args.enable_seqloss:
@@ -706,7 +705,7 @@ def train(gpu, ngpus_per_node, args):
             elif args.enable_scalelossonly:
                 loss = (rpjloss_cale + rpjloss_fin) / 2 * 0 + scaleloss
             else:
-                loss = (rpjloss_cale + rpjloss_fin) / 2 + scaleloss
+                loss = (rpjloss_cale + rpjloss_fin) / 2 * 0.1 + scaleloss
 
             metrics = dict()
             metrics['rpjloss_cale'] = rpjloss_cale.item()

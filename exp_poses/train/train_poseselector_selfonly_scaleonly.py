@@ -727,7 +727,6 @@ def train(gpu, ngpus_per_node, args):
 
             if total_steps % VAL_FREQ == 1:
                 results = validate_kitti(model.module, args, eval_loader, group, seqmap)
-
                 if args.gpu == 0:
                     logger_evaluation.write_dict(results, total_steps)
                     if minabsl > results['absl']:
