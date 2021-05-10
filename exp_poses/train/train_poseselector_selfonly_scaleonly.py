@@ -492,7 +492,7 @@ class silog_loss(nn.Module):
         return torch.sqrt((d ** 2).mean() - self.variance_focus * (d.mean() ** 2)) * 10.0
 
 def read_odomeval_splits(ngpus_per_node):
-    if ngpus_per_node >=4 :
+    if ngpus_per_node >= 4:
         seqmapping = \
         ['00 2011_10_03_drive_0027 000000 004540']
     else:
