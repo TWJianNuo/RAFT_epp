@@ -520,8 +520,8 @@ def read_odomeval_splits(ngpus_per_node):
 
 def read_splits(ngpus_per_node):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
-    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
+    # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files (copy).txt'), 'r')]
     evaluation_entries, seqmap = read_odomeval_splits(ngpus_per_node)
     return train_entries, evaluation_entries, seqmap
 
