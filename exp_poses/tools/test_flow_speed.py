@@ -20,6 +20,8 @@ from core.utils.utils import InputPadder, forward_interpolate, tensor2rgb
 from numpy.random import default_rng
 import matplotlib.pyplot as plt
 import torch.multiprocessing as mp
+import torch.backends.cudnn as cudnn
+cudnn.benchmark = True
 
 def get_odomentries(args):
     import glob
@@ -120,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--evalwidth', type=int, default=1e10)
     parser.add_argument('--maxinsnum', type=int, default=50)
     args = parser.parse_args()
+
 
     model = torch.nn.DataParallel(RAFT(args))
     model.load_state_dict(torch.load(args.model))
