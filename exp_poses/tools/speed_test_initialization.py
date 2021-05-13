@@ -40,22 +40,6 @@ from tqdm import tqdm
 import glob
 import time
 
-def read_deepv2d_pose(deepv2dpose_path):
-    # Read Pose from Deepv2d
-    posesstr = readlines(deepv2dpose_path)
-    poses = list()
-    for pstr in posesstr:
-        pose = np.zeros([4, 4]).flatten()
-        for idx, ele in enumerate(pstr.split(' ')):
-            pose[idx] = float(ele)
-            if idx == 15:
-                break
-        pose = np.reshape(pose, [4, 4])
-        poses.append(pose)
-    pose_deepv2d = poses[3] @ np.linalg.inv(poses[0])
-    pose_deepv2d[0:3, 3] = pose_deepv2d[0:3, 3] * 10
-    return pose_deepv2d
-
 def read_calib_file(path):
     """Read KITTI calibration file
     (from https://github.com/hunse/kitti)
@@ -393,11 +377,6 @@ def inf_pose_flow(flow_pr_inf, insmap, mdDepth, intrinsic, pid, gradComputer=Non
         t = np.array([[0, 0, -1]]).T
         scale_md = 0
 
-    # Image.fromarray(flow_to_image(flow_pr_inf[0].cpu().permute([1, 2, 0]).numpy())).show()
-    # tensor2disp(torch.from_numpy(selector).unsqueeze(0).unsqueeze(0), vmax=1, viewind=0).show()
-    # tensor2disp(depthmap > 0, vmax=1, viewind=0).show()
-    # tensor2disp(torch.from_numpy(selvls).unsqueeze(0).unsqueeze(0), vmax=1, viewind=0).show()
-
     return R, t, scale_md, flow_sel_mag
 
 def readlines(filename):
@@ -456,36 +435,20 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
     else:
         gradComputer = GradComputer()
 
-    for val_id, data_blob in enumerate(tqdm(eval_loader)):
+    totnum = 0
+    dr = 0
+    for val_id, data_blob in enumerate(eval_loader):
         insmap = data_blob['insmap']
         intrinsic = data_blob['intrinsic']
         flowpred = data_blob['flowpred_RAFT']
         mdDepth_pred = data_blob['mdDepth']
-        pose_bs = data_blob['posepred_bs']
-        tag = data_blob['tag'][0]
 
-        seq, frmidx = tag.split(' ')
-        exportfold = os.path.join(args.export_root, str(iters).zfill(3), seq, 'image_02')
-        os.makedirs(exportfold, exist_ok=True)
-        export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
-
-        if torch.sum(torch.abs(data_blob['img1'] - data_blob['img2'])) < 1:
-            R = np.eye(3)
-            t = np.array([[0, 0, -1]]).T
-            scale = 0
-        else:
-            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
-        self_pose = np.eye(4)
-        self_pose[0:3, 0:3] = R
-        self_pose[0:3, 3:4] = t * scale
-
-        pose_bs_np = pose_bs[0].cpu().numpy()
-        pose_bs_np = pose_bs_np @ np.linalg.inv(pose_bs_np[0]) @ self_pose
-        pose_bs_np[0] = self_pose
-
-        with open(export_root, 'wb') as handle:
-            pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
+        st = time.time()
+        R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
+        dr += time.time() - st
+        totnum += 1
+        print("%d Samples, Ave sec/frame: %f, Mem: %f Gb" % (
+            totnum, dr / totnum, float(torch.cuda.memory_allocated() / 1024 / 1024 / 1024)))
 def get_odomentries(args):
     import glob
     odomentries = list()
@@ -502,34 +465,26 @@ def get_odomentries(args):
             odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
     return odomentries
 
-def generate_seqmapping(args):
+def generate_seqmapping():
     seqmapping = \
     ['00 2011_10_03_drive_0027 000000 004540',
-     '01 2011_10_03_drive_0042 000000 001100',
-     "02 2011_10_03_drive_0034 000000 004660",
-     "03 2011_09_26_drive_0067 000000 000800",
      "04 2011_09_30_drive_0016 000000 000270",
      "05 2011_09_30_drive_0018 000000 002760",
-     "06 2011_09_30_drive_0020 000000 001100",
-     "07 2011_09_30_drive_0027 000000 001100",
-     "08 2011_09_30_drive_0028 001100 005170",
-     "09 2011_09_30_drive_0033 000000 001590",
-     "10 2011_09_30_drive_0034 000000 001200"]
+     "07 2011_09_30_drive_0027 000000 001100"]
 
     entries = list()
     seqmap = dict()
     for seqm in seqmapping:
         mapentry = dict()
         mapid, seqname, stid, enid = seqm.split(' ')
-        if int(mapid) == int(args.seqid):
-            mapentry['mapid'] = int(mapid)
-            mapentry['stid'] = int(stid)
-            mapentry['enid'] = int(enid)
-            seqmap[seqname] = mapentry
+        mapentry['mapid'] = int(mapid)
+        mapentry['stid'] = int(stid)
+        mapentry['enid'] = int(enid)
+        seqmap[seqname] = mapentry
 
-            for k in range(int(stid), int(enid)):
-                entries.append("{}/{}_sync {} {}".format(seqname[0:10], seqname, str(k).zfill(10), 'l'))
-    entries.sort()
+        for k in range(int(stid), int(enid)):
+            entries.append("{}/{}_sync {} {}".format(seqname[0:10], seqname, str(k).zfill(10), 'l'))
+
     return seqmap, entries
 
 def read_splits(args, it):
@@ -567,106 +522,113 @@ def read_splits(args, it):
     else:
         totentries = list(set(train_entries))
 
-    if args.skipexist:
-        exportentries = list()
-        for e in totentries:
-            seq, frmidx, _ = e.split(' ')
-            exportfold = os.path.join(args.export_root, str(it).zfill(3), seq, 'image_02')
-            export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
-            try:
-                pred_pose = pickle.load(open(export_root, "rb"))
-                if pred_pose.shape[0] < 1 or np.ndim(pred_pose) != 3:
-                    exportentries.append(e)
-            except:
-                exportentries.append(e)
-    else:
-        exportentries = totentries
-
-    return exportentries
+    return totentries
 
 
 def train(processid, args, entries, iters=0):
-    interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
-    if processid == args.nprocs - 1:
-        stidx = int(interval * processid)
-        edidx = len(entries)
-    else:
-        stidx = int(interval * processid)
-        edidx = int(interval * (processid + 1))
-
+    stidx = 0
+    edidx = len(entries)
     eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root,
                                mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
     validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum, iters=iters)
     return
 
-def eval_generated_odom(args, seqmap, entries):
-    seq = list(seqmap.keys())[0]
-    gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[seq[0:21]]['mapid']).zfill(2))))
-    gtposes = list()
-    for gtpose_src in gtposes_sourse:
-        gtpose = np.eye(4).flatten()
-        for numstridx, numstr in enumerate(gtpose_src.split(' ')):
-            gtpose[numstridx] = float(numstr)
-        gtpose = np.reshape(gtpose, [4, 4])
-        gtposes.append(gtpose)
+def eval_generated_odom(args, seqmap, entries, repeats=64):
+    accumerr = dict()
+    pos_recs = dict()
 
-    relposes_RANSAC = list()
     for val_id, entry in enumerate(tqdm(entries)):
+        # Read Pose gt
         seq, frameidx, _ = entry.split(' ')
-        scale_bs = os.path.join(args.mdPred_root, entry.split(' ')[0], 'image_02/posepred')
-        try:
-            if args.isdeepv2d:
-                pose_RANSAC_path = os.path.join(args.pridction_root, entry.split(' ')[0], 'posepred', str(frameidx).zfill(10) + '.txt')
-                pose_RANSAC = read_deepv2d_pose(pose_RANSAC_path)
-            else:
-                pose_RANSAC_path = os.path.join(args.pridction_root, entry.split(' ')[0], 'image_02', str(frameidx).zfill(10) + '.pickle')
-                pose_RANSAC = pickle.load(open(pose_RANSAC_path, "rb"))
-                pose_RANSAC = pose_RANSAC[0]
-            relposes_RANSAC.append(pose_RANSAC)
-        except:
-            if val_id == len(entries) - 1:
-                continue
-            else:
-                raise Exception("Missing prediciton")
+        seq = seq.split('/')[1]
+        if seq not in accumerr.keys():
+            accumerr[seq] = {'pose_RANSAC': list()}
+            accumpos = {'pose_RANSAC': np.array([[0, 0, 0, 1]]).T, 'pose_gt': np.array([[0, 0, 0, 1]]).T}
+            pos_recs[seq] = {'pose_RANSAC': list(), 'pose_gt': list()}
 
-    if len(relposes_RANSAC) == len(gtposes) - 2:
-        relposes_RANSAC.append(np.linalg.inv(gtposes[-1]) @ gtposes[-2])
+        frameidx = int(frameidx)
+        gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[seq[0:21]]['mapid']).zfill(2))))
+        if frameidx - int(seqmap[seq[0:21]]['stid']) < 0 or \
+                frameidx + 1 - int(seqmap[seq[0:21]]['stid']) < 0 or \
+                frameidx - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse) or \
+                frameidx + 1 - int(seqmap[seq[0:21]]['stid']) >= len(gtposes_sourse):
+            continue
+        gtposes_str = [gtposes_sourse[frameidx - int(seqmap[seq[0:21]]['stid'])],
+                       gtposes_sourse[frameidx + 1 - int(seqmap[seq[0:21]]['stid'])]]
+        gtposes = list()
+        for gtposestr in gtposes_str:
+            gtpose = np.eye(4).flatten()
+            for numstridx, numstr in enumerate(gtposestr.split(' ')):
+                gtpose[numstridx] = float(numstr)
+            gtpose = np.reshape(gtpose, [4, 4])
+            gtposes.append(gtpose)
+        posegt = np.linalg.inv(gtposes[1]) @ gtposes[0]
 
-    accumPose = np.eye(4)
-    reconstructed_pose = [accumPose]
-    for r in relposes_RANSAC:
-        accumPose = r @ accumPose
-        reconstructed_pose.append(np.linalg.inv(accumPose))
+        poses = dict()
+        pose_RANSAC_path = os.path.join(args.export_root, str(repeats).zfill(3), entry.split(' ')[0], 'image_02', str(frameidx).zfill(10) + '.pickle')
+        pose_RANSAC = pickle.load(open(pose_RANSAC_path, "rb"))
+        poses['pose_gt'] = posegt
+        poses['pose_RANSAC'] = pose_RANSAC[0]
 
-    os.makedirs(args.export_root, exist_ok=True)
-    exportextpath = os.path.join(args.export_root, str(args.seqid).zfill(2) + '.txt')
-    with open(exportextpath, "w") as text_file:
-        for k, r in enumerate(reconstructed_pose):
-            r = r[0:3, :]
-            printstr = ""
-            for n in r.flatten():
-                printstr += "{:.6e} ".format(n)
-            printstr = printstr[0:-1]
-            if k < len(reconstructed_pose) - 1:
-                text_file.write(printstr + '\n')
-            else:
-                text_file.write(printstr)
+        # Update Pose
+        for k in accumpos.keys():
+            accumpos[k] = poses[k] @ accumpos[k]
+            pos_recs[seq][k].append(accumpos[k])
+
+        for k in accumerr[seq].keys():
+            loss_pos = np.sqrt(np.sum((accumpos[k] - accumpos['pose_gt']) ** 2))
+            accumerr[seq][k].append(loss_pos.item())
+
+    accumerr_fin = dict()
+    for k in accumerr.keys():
+        accumerr_fin[k] = dict()
+        for kk in accumerr[k].keys():
+            accumerr_fin[k][kk] = np.array(accumerr[k][kk])[-1] / len(accumerr[k][kk])
+
+    weighted_err_dict = dict()
+    for k in accumerr[seq].keys():
+        totframe = 0
+        for s in accumerr_fin.keys():
+            totframe += len(accumerr[s][k])
+
+        weighted_err = 0
+        for s in accumerr_fin.keys():
+            weighted_err += len(accumerr[s][k]) / totframe * accumerr_fin[s][k]
+
+        weighted_err_dict[k] = weighted_err
+
+    for k in weighted_err_dict.keys():
+        print("%s : %f" % (k.ljust(50), weighted_err_dict[k]))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--odom_root', type=str)
-    parser.add_argument('--pridction_root', type=str)
     parser.add_argument('--mdPred_root', type=str)
+    parser.add_argument('--bsposepred_root', type=str)
+    parser.add_argument('--flowPred_root', type=str)
+    parser.add_argument('--ins_root', type=str)
     parser.add_argument('--export_root', type=str)
     parser.add_argument('--num_workers', type=int, default=6)
-    parser.add_argument('--seqid', type=str, default=1)
-    parser.add_argument('--isdeepv2d', action='store_true')
+    parser.add_argument('--banins', action='store_true')
+    parser.add_argument('--bangrad', action='store_true')
+    parser.add_argument('--only_eval', action='store_true')
+    parser.add_argument('--ban_odometry', action='store_true')
+    parser.add_argument('--samplenum', type=int, default=50000)
+    parser.add_argument('--nprocs', type=int, default=6)
+    parser.add_argument('--export_first_it', action='store_true')
+    parser.add_argument('--delay', type=int, default=0)
+    parser.add_argument('--stid', type=int, default=1)
+    parser.add_argument('--edid', type=int, default=1)
+    parser.add_argument('--evalonly', action='store_true')
+    parser.add_argument('--skipexist', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    seqmap, oval_entries = generate_seqmapping(args)
-    eval_generated_odom(args, seqmap, oval_entries)
+    k = 0
+    entries = read_splits(args, it=k)
+    train(0, args, entries, k)
