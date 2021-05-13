@@ -103,7 +103,7 @@ def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, i
             flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
             dr += time.time() - st
             totnum += 1
-            print("%d Samples, Ave sec/frame: %f" % (totnum, dr / totnum))
+            print("%d Samples, Ave sec/frame: %f, Mem: %f Gb" % (totnum, dr / totnum, float(torch.cuda.memory_allocated() / 1024 / 1024 / 1024)))
     return
 
 if __name__ == '__main__':
