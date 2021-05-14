@@ -513,8 +513,6 @@ def get_odomentries_train(args):
 def read_splits(args):
     train_entries = get_odomentries_train(args)
     evaluation_entries, seqmap = read_odomeval_splits()
-    import random
-    random.shuffle(train_entries)
     return train_entries, evaluation_entries, seqmap
 
 def get_reprojection_loss(img1, outputs, ssim, args):
