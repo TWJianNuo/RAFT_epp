@@ -603,7 +603,7 @@ def train(gpu, ngpus_per_node, args):
         checkpoint = torch.load(args.restore_ckpt, map_location=loc)
         model.load_state_dict(checkpoint, strict=False)
 
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin{}.pickle'.format(str(int(32 / args.num_angs)))), 'rb') as f:
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'eppflownet/pose_bin_odom{}.pickle'.format(str(int(32 / args.num_angs)))), 'rb') as f:
         linlogdedge = pickle.load(f)
     minidx = np.argmin(np.abs(linlogdedge))
     print("Min index is :%d, val: %f" % (minidx, linlogdedge[minidx]))
