@@ -811,10 +811,10 @@ if __name__ == '__main__':
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
-    parser.add_argument('--rpjloss_w', type=float, default=1)
-    parser.add_argument('--flowloss_w', type=float, default=1)
-    parser.add_argument('--scaleloss_w', type=float, default=1)
-    parser.add_argument('--scaleloss_odom_w', type=float, default=1)
+    parser.add_argument('--rpjloss_w', type=float, default=0)
+    parser.add_argument('--flowloss_w', type=float, default=0)
+    parser.add_argument('--scaleloss_w', type=float, default=0)
+    parser.add_argument('--scaleloss_odom_w', type=float, default=0)
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
