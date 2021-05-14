@@ -23,8 +23,8 @@ import torch.nn.functional as F
 import time
 
 from torch.utils.data import DataLoader
-from exp_poses.dataset_kitti_eigen_poseselector import KITTI_eigen
-from exp_poses.dataset_kitti_odom_poseselector import KITTI_odom
+from exp_poses.dataset_kitti_eigen_poseselector_odom import KITTI_eigen
+from exp_poses.dataset_kitti_odom_poseselector_odom import KITTI_odom
 from exp_poses.eppflownet.EppflowNet_poseselector_selfonly_scaleonly import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
@@ -169,9 +169,13 @@ class Logger:
         depthpredvls = tensor2disp(1 / data_blob['mdDepth_pred'], vmax=0.15, viewind=0)
         imgrecon = tensor2rgb(outputs[('img1_recon', 2)][:, -1], viewind=0)
 
+        flow_RAFT = Image.fromarray(flow_to_image(data_blob['flowpred'][0].permute([1, 2, 0]).cpu().numpy()))
+        flow_pred = Image.fromarray(flow_to_image(outputs[('flowpred', 2)][0].permute([1, 2, 0]).detach().cpu().numpy()))
+
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
         img_val_mid = np.concatenate([np.array(depthpredvls), np.array(imgrecon)], axis=1)
-        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid)], axis=0)
+        img_val_flow = np.concatenate([np.array(flow_RAFT), np.array(flow_pred)], axis=1)
+        img_val = np.concatenate([np.array(img_val_up), np.array(img_val_mid), np.array(img_val_flow)], axis=0)
         self.writer.add_image('predvls', (torch.from_numpy(img_val).float() / 255).permute([2, 0, 1]), step)
 
         X = self.vls_sampling(np.array(insvls), img2, data_blob['depthvls'], outputs)
@@ -350,8 +354,6 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
         tot_err = dict()
         tot_err['positions_pred'] = 0
         tot_err['positions_RANSAC'] = 0
-        tot_err['positions_Deepv2d'] = 0
-        tot_err['positions_RANSAC_Deepv2dscale'] = 0
         tot_err['positions_RANSAC_Odomscale'] = 0
 
         for s in seqmap.keys():
@@ -364,12 +366,6 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
                 RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
-
-            Deepv2d_poses = list()
-            for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, s[0:10], s + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
-                Deepv2d_pose = read_deepv2d_pose(Deepv2d_pose_path)
-                Deepv2d_poses.append(Deepv2d_pose)
 
             gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[s]['mapid']).zfill(2))))
             gtposes = list()
@@ -423,27 +419,6 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
             positions_RANSAC = np.array(positions_RANSAC)
             scale_RANSAC = np.array(scale_RANSAC)
 
-            positions_Deepv2d = list()
-            scale_Deepv2d = list()
-            stpos = np.array([[0, 0, 0, 1]]).T
-            accumP = np.eye(4)
-            for d in Deepv2d_poses:
-                accumP = d @ accumP
-                positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
-                scale_Deepv2d.append(np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10))
-            positions_Deepv2d = np.array(positions_Deepv2d)
-            scale_Deepv2d = np.array(scale_Deepv2d)
-
-            positions_RANSAC_Deepv2dscale = list()
-            stpos = np.array([[0, 0, 0, 1]]).T
-            accumP = np.eye(4)
-            for i, r in enumerate(RANSAC_poses):
-                r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(
-                    np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
-                accumP = r @ accumP
-                positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
-            positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
-
             positions_RANSAC_Odomscale = list()
             stpos = np.array([[0, 0, 0, 1]]).T
             accumP = np.eye(4)
@@ -456,14 +431,11 @@ def validate_kitti(model, args, eval_loader, group, seqmap):
 
             posrec['positions_pred'] = positions_pred
             posrec['positions_RANSAC'] = positions_RANSAC
-            posrec['positions_Deepv2d'] = positions_Deepv2d
-            posrec['positions_RANSAC_Deepv2dscale'] = positions_RANSAC_Deepv2dscale
             posrec['positions_RANSAC_Odomscale'] = positions_RANSAC_Odomscale
 
             scalerec = dict()
             scalerec['scale_pred'] = scale_pred
             scalerec['scale_RANSAC'] = scale_RANSAC
-            scalerec['scale_Deepv2d'] = scale_Deepv2d
 
             print("============= %s ============" % (s))
             print("In total %d images," % positions_odom.shape[0])
@@ -510,10 +482,39 @@ def read_odomeval_splits():
     entries.sort()
     return entries, seqmap
 
-def read_splits():
-    split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
+def get_odomentries_train(args):
+    import glob
+    odomentries = list()
+
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_10_03/2011_10_03_drive_0042_sync',
+        "2011_10_03/2011_10_03_drive_0034_sync",
+        "2011_09_26/2011_09_26_drive_0067_sync",
+        "2011_09_30/2011_09_30_drive_0016_sync",
+        "2011_09_30/2011_09_30_drive_0018_sync",
+        "2011_09_30/2011_09_30_drive_0020_sync",
+        "2011_09_30/2011_09_30_drive_0027_sync",
+        "2011_09_30/2011_09_30_drive_0028_sync"
+    ]
+    for odomseq in odomseqs:
+        if os.path.isdir(os.path.join(args.odom_root, odomseq)):
+            tmproot = args.odom_root
+        else:
+            tmproot = args.dataset_root
+        leftimgs = glob.glob(os.path.join(tmproot, odomseq, 'image_02/data', "*.png"))
+        for leftimg in leftimgs:
+            imgname = os.path.basename(leftimg)
+            odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
+    import random
+    random.shuffle(odomentries)
+    return odomentries
+
+def read_splits(args):
+    train_entries = get_odomentries_train(args)
     evaluation_entries, seqmap = read_odomeval_splits()
+    import random
+    random.shuffle(train_entries)
     return train_entries, evaluation_entries, seqmap
 
 def get_reprojection_loss(img1, outputs, ssim, args):
@@ -532,6 +533,18 @@ def get_reprojection_loss(img1, outputs, ssim, args):
         rpjloss += rpjloss_cm
     rpjloss = rpjloss / 2
     return rpjloss
+
+def get_flow_loss(flowpred, outputs, args):
+    _, _, h, w = flowpred.shape
+    flowloss = 0
+    selector_mask = torch.ones_like(outputs[('inboundmask', 1)])
+    selector_mask[:, :, 0:int(0.25810811 * h)] = 0
+    for k in range(1, 3, 1):
+        selector = outputs[('inboundmask', k)] * selector_mask
+        predflow = outputs[('flowpred', k)].squeeze(1)
+        flowloss += torch.sum(torch.abs(predflow - flowpred) * selector) / torch.sum(selector)
+    flowloss = flowloss / 2
+    return flowloss
 
 def get_scale_loss(outputs, gpsscale):
     scaleloss = 0
@@ -599,7 +612,7 @@ def train(gpu, ngpus_per_node, args):
 
     model.train()
 
-    train_entries, evaluation_entries, seqmap = read_splits()
+    train_entries, evaluation_entries, seqmap = read_splits(args)
 
     interval = np.floor(len(evaluation_entries) / ngpus_per_node).astype(np.int).item()
     if args.gpu == ngpus_per_node - 1:
@@ -611,8 +624,8 @@ def train(gpu, ngpus_per_node, args):
 
     print("GPU %d, eval fromm %d to %d, in total %d" % (gpu, stidx, edidx, edidx - stidx))
 
-    train_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
-                                depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root,
+    train_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, inheight=args.inheight, inwidth=args.inwidth, entries=train_entries, maxinsnum=args.maxinsnum, linlogdedge=linlogdedge, num_samples=args.num_angs,
+                                depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, ins_root=args.ins_root, mdPred_root=args.mdPred_root, flowPred_root=args.flowPred_root,
                                 RANSACPose_root=args.RANSACPose_root, istrain=True, muteaug=False, banremovedup=True, isgarg=False)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=int(args.num_workers / ngpus_per_node), drop_last=True, sampler=train_sampler)
@@ -661,41 +674,41 @@ def train(gpu, ngpus_per_node, args):
             ang_decps_pad = data_blob['ang_decps_pad'].cuda(gpu)
             scl_decps_pad = data_blob['scl_decps_pad'].cuda(gpu)
             mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
+            flowpred = data_blob['flowpred'].cuda(gpu)
+
             rel_pose = data_blob['rel_pose'].cuda(gpu)
+            rel_pose_odom = data_blob['rel_pose_odom'].cuda(gpu)
 
             posepred = posepred[:, :, 0]
             ang_decps_pad = ang_decps_pad[:, :, 0]
             scl_decps_pad = scl_decps_pad[:, :, 0]
             mvd_decps_pad = mvd_decps_pad[:, :, 0]
 
-            # IMUlocations1 = data_blob['IMUlocations1'].cuda(gpu)
-            # leftarrs1 = data_blob['leftarrs1'].cuda(gpu)
-            # rightarrs1 = data_blob['rightarrs1'].cuda(gpu)
-            # IMUlocations2 = data_blob['IMUlocations2'].cuda(gpu)
-            # leftarrs2 = data_blob['leftarrs2'].cuda(gpu)
-            # rightarrs2 = data_blob['rightarrs2'].cuda(gpu)
-
             gpsscale = torch.sqrt(torch.sum(rel_pose[:, 0:3, 3] ** 2, dim=1))
+            gpsscale_odom = torch.sqrt(torch.sum(rel_pose_odom[:, 0:3, 3] ** 2, dim=1))
 
             mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
-            # tensor2disp(1/mD_pred_clipped, vmax=0.15, viewind=0).show()
             outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
-            rpjloss = get_reprojection_loss(image1, outputs, ssim, args)
-            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
-            # seqloss = get_seq_loss(IMUlocations1, leftarrs1, rightarrs1, IMUlocations2, leftarrs2, rightarrs2, outputs, args)
-            seqloss = 0
 
-            if args.enable_seqloss:
-                loss = rpjloss + seqloss
-            elif args.enable_scalelossonly:
-                loss = rpjloss * 0 + scaleloss
-            else:
-                loss = rpjloss * 0.1 + scaleloss
+            # from core.utils.flow_viz import flow_to_image
+            # Image.fromarray(flow_to_image(flowpred[0].permute([1, 2, 0]).cpu().numpy(), rad_max=50)).show()
+            # Image.fromarray(flow_to_image(outputs[('flowpred', 2)][0].permute([1, 2, 0]).detach().cpu().numpy(), rad_max=50)).show()
+            # tensor2rgb(image1, viewind=0).show()
+            # tensor2rgb(outputs[('img1_recon', 2)].squeeze(1), viewind=0).show()
+
+            scaleloss = get_scale_loss(gpsscale=gpsscale, outputs=outputs)
+            scaleloss_odom = get_scale_loss(gpsscale=gpsscale_odom, outputs=outputs)
+            rpjloss = get_reprojection_loss(image1, outputs, ssim, args)
+            flowloss = get_flow_loss(flowpred, outputs, args)
+
+            loss = rpjloss * args.rpjloss_w + flowloss * args.flowloss_w + scaleloss * args.scaleloss_w + scaleloss_odom * args.scaleloss_odom_w
 
             metrics = dict()
-            metrics['rpjlossc'] = rpjloss
+            metrics['rpjloss'] = rpjloss
+            metrics['flowloss'] = flowloss
             metrics['scaleloss'] = scaleloss
+            metrics['scaleloss_odom'] = scaleloss_odom
             metrics['loss'] = loss
 
             if torch.sum(torch.isnan(loss)) > 0:
@@ -706,9 +719,6 @@ def train(gpu, ngpus_per_node, args):
 
             optimizer.step()
             scheduler.step()
-
-            # if args.gpu == 0:
-            #     print(i_batch, loss.item(), scaleloss, torch.mean(image1))
 
             if args.gpu == 0:
                 logger.write_dict(metrics, step=total_steps)
@@ -727,12 +737,6 @@ def train(gpu, ngpus_per_node, args):
                         PATH = os.path.join(logroot, 'minabsl.pth')
                         torch.save(model.state_dict(), PATH)
                         print("model saved to %s" % PATH)
-
-                # if args.gpu == 0:
-                #     results = validate_kitti(model.module, args, eval_loader, None, group, total_steps, isorg=True)
-                #     logger_evaluation_org.write_dict(results, total_steps)
-                # else:
-                #     validate_kitti(model.module, args, eval_loader, None, group, None, isorg=True)
 
                 model.train()
 
@@ -799,15 +803,20 @@ if __name__ == '__main__':
     parser.add_argument('--semantics_root', type=str)
     parser.add_argument('--depth_root', type=str)
     parser.add_argument('--depthvlsgt_root', type=str)
+    parser.add_argument('--flowPred_root', type=str)
     parser.add_argument('--prediction_root', type=str, default=None)
     parser.add_argument('--mdPred_root', type=str)
     parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--deepv2dPose_root', type=str)
+    parser.add_argument('--odom_root', type=str)
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
-    parser.add_argument('--enable_seqloss', action='store_true')
-    parser.add_argument('--enable_scalelossonly', action='store_true')
+
+    parser.add_argument('--rpjloss_w', type=float, default=1)
+    parser.add_argument('--flowloss_w', type=float, default=1)
+    parser.add_argument('--scaleloss_w', type=float, default=1)
+    parser.add_argument('--scaleloss_odom_w', type=float, default=1)
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')

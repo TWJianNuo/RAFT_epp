@@ -556,8 +556,13 @@ class EppFlowNet(nn.Module):
         pxx = (pxx / pzz).squeeze(-1).squeeze(-1)
         pyy = (pyy / pzz).squeeze(-1).squeeze(-1)
 
+        flowx = pxx - xx
+        flowy = pyy - yy
+        flowpred = torch.cat([flowx, flowy], dim=1)
+
         supressval = torch.ones_like(pxx) * (-100)
-        inboundmask = ((pzz > 1e-20).squeeze(-1).squeeze(-1)).float()
+        # inboundmask = ((pzz > 1e-20).squeeze(-1).squeeze(-1)).float()
+        inboundmask = ((pzz > 1e-20).squeeze(-1).squeeze(-1) * (pxx >= 0) * (pyy >= 0) * (pxx < orgw) * (pyy < orgh)).float()
 
         pxx = inboundmask * pxx + supressval * (1 - inboundmask)
         pyy = inboundmask * pyy + supressval * (1 - inboundmask)
@@ -575,4 +580,6 @@ class EppFlowNet(nn.Module):
         # tensor2rgb(img1_recon[:, 0], viewind=1).show()
         outputs = dict()
         outputs[('img1_recon', k)] = img1_recon
+        outputs[('inboundmask', k)] = inboundmask
+        outputs[('flowpred', k)] = flowpred
         return outputs
