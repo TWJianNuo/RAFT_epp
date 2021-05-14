@@ -82,7 +82,7 @@ def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, i
 
             if args.dovls:
                 vlsflow = Image.fromarray(flow_viz.flow_to_image(flow_numpy))
-                vlsmrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
+                vlsrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
                 vlsrgb2 = tensor2rgb(image2 / 255.0, viewind=0)
 
                 w, h = vlsrgb2.size
