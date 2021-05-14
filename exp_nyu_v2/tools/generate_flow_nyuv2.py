@@ -80,10 +80,9 @@ def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, i
 
             frame_utils.writeFlowKITTI(svpath, flow_numpy)
 
-            # if np.random.randint(0, 500) == 1:
-            if True:
+            if args.dovls:
                 vlsflow = Image.fromarray(flow_viz.flow_to_image(flow_numpy))
-                vlsrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
+                vlsmrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
                 vlsrgb2 = tensor2rgb(image2 / 255.0, viewind=0)
 
                 w, h = vlsrgb2.size
@@ -125,6 +124,7 @@ if __name__ == '__main__':
     parser.add_argument('--mixed_precision', action='store_true', help='use small model')
     parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
     parser.add_argument('--odom_root', type=str)
+    parser.add_argument('--dovls', action='store_true', help='use small model')
 
     parser.add_argument('--evalheight', type=int, default=1e10)
     parser.add_argument('--evalwidth', type=int, default=1e10)
