@@ -562,12 +562,14 @@ if __name__ == '__main__':
     parser.add_argument('--nprocs', type=int, default=6)
     parser.add_argument('--dovls', action="store_true")
     parser.add_argument('--ban_scale_check', action="store_true")
+    parser.add_argument('--stid', type=int, default=0)
+    parser.add_argument('--edid', type=int, default=3)
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    for k in range(3):
+    for k in range(args.stid, args.edid):
         print("Start Iteration %d" % (k))
         entries = read_splits(k)
         mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
