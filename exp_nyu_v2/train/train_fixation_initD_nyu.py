@@ -36,8 +36,8 @@ import torch.distributed as dist
 from torch.autograd import Variable
 from tqdm import tqdm
 
-import torch.backends.cudnn as cudnn
-cudnn.benchmark = True
+# import torch.backends.cudnn as cudnn
+# cudnn.benchmark = True
 
 
 # exclude extremly large displacements
