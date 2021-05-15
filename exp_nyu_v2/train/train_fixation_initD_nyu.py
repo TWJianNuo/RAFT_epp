@@ -34,8 +34,11 @@ from posenet import Posenet
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.autograd import Variable
-
 from tqdm import tqdm
+
+import torch.backends.cudnn as cudnn
+cudnn.benchmark = True
+
 
 # exclude extremly large displacements
 MAX_FLOW = 400
