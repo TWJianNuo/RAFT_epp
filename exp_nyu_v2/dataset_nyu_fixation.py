@@ -255,11 +255,7 @@ class NYUV2(data.Dataset):
             samp_rep = int(np.random.choice(list(range(self.nposs)), 1).item())
         else:
             samp_rep = int(0)
-        # try:
-        #     mdDepth_pred = cv2.imread(self.mdDepthpath_list[index].format(str(samp_rep).zfill(3)), -1) / 1000.0
-        # except:
-        #     print(self.mdDepthpath_list[index].format(str(samp_rep).zfill(3)))
-        #     raise Exception()
+
         mdDepth_pred = cv2.imread(self.mdDepthpath_list[index].format(str(samp_rep).zfill(3)), -1) / 1000.0
         posepred = pickle.load(open(self.RANSACPose_list[index].format(str(samp_rep).zfill(3)), "rb"))
         flowpred, _ = frame_utils.readFlowKITTI(self.flowpred_list[index])
@@ -289,9 +285,10 @@ class NYUV2(data.Dataset):
 
         if self.istrain:
             top = np.random.randint(0, h - crph - 1, 1).item()
+            left = np.random.randint(0, w - crpw - 1, 1).item()
         else:
             top = int((h - crph) / 2)
-        left = 0
+            left = int((w - crpw) / 2)
 
         if not self.istrain:
             eval_mask = np.zeros(depthmap.shape)
