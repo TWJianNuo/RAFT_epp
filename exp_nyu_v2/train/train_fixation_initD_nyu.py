@@ -473,7 +473,7 @@ if __name__ == '__main__':
     # parser.add_argument('--inheight', type=int, default=448)
     # parser.add_argument('--inwidth', type=int, default=640)
     parser.add_argument('--inheight', type=int, default=448)
-    parser.add_argument('--inwidth', type=int, default=576)
+    parser.add_argument('--inwidth', type=int, default=512)
     parser.add_argument('--evalheight', type=int, default=448)
     parser.add_argument('--evalwidth', type=int, default=640)
     parser.add_argument('--min_depth_pred', type=float, default=1e-3)
