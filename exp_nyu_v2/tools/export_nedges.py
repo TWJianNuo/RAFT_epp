@@ -104,84 +104,53 @@ def get_reldepth_binrange(depthnp_relfs):
     return sampled_depth
 
 @torch.no_grad()
-def get_eppflow_range(args, eval_loader, evaluation_entries):
+def get_eppflow_range(args, evaluation_entries):
     """ Peform validation using the KITTI-2015 (train) split """
+    diffrecs = list()
+    for val_id, entry in enumerate(tqdm(evaluation_entries)):
+        seq, index = entry.split(' ')
+        index = int(index)
 
-    t_norms = list()
-    t_dirs = list()
-    depthnp_relfs = list()
-    angs = list()
-    for val_id, batch in enumerate(tqdm(eval_loader)):
-        rel_pose = batch['rel_pose']
-        depth = batch['depth']
+        dgt_path = os.path.join(args.dataset_root, seq, 'sync_depth_{}.png'.format(str(index).zfill(5)))
+        gtDepth = cv2.imread(dgt_path, -1)
+        gtDepth = gtDepth.astype(np.float32) / 1000.0
 
-        depthnp = depth.squeeze().numpy()
-        rel_posenp = rel_pose.squeeze().numpy()
+        dpred_path = os.path.join(args.pred_root, seq, 'sync_depth_{}.png'.format(str(index).zfill(5)))
+        predDepth = cv2.imread(dpred_path, -1)
+        predDepth = predDepth.astype(np.float32) / 1000.0
 
-        t_norm = np.sqrt(np.sum(rel_posenp[0:3, 3] ** 2))
+        valid_mask = np.logical_and(gtDepth > args.min_depth_eval, gtDepth < args.max_depth_eval)
+        eval_mask = np.zeros(valid_mask.shape)
+        eval_mask[45:471, 41:601] = 1
+        eval_mask = eval_mask * valid_mask
+        eval_mask = eval_mask == 1
 
-        t_dir = rel_posenp[0:3, 3] / t_norm
+        diffrecs += (np.log(predDepth[eval_mask]) - np.log(gtDepth[eval_mask])).tolist()
 
-        depthnp_relf = t_norm / depthnp[depthnp > 0]
+        # from core.utils.utils import tensor2disp
+        # tensor2disp(1 / preddepth, vmax=0.15, viewind=0).show()
 
-        ang = R2ang(rel_posenp[0:3, 0:3])
+    diffrecs = np.array(diffrecs)
+    diffrecs_abs = np.sort(np.abs(diffrecs))
+    diffrecs_abs = diffrecs_abs[diffrecs_abs < 0.6]
+    num_sample = diffrecs_abs.shape[0]
+    samplepose = np.linspace(0, int(num_sample * 0.999), 16).astype(np.int)
 
-        t_norms.append(t_norm)
-        if t_norm > 0.2:
-            t_dirs.append(t_dir)
-        depthnp_relfs.append(depthnp_relf)
-        angs.append(ang)
+    sampled_edge = diffrecs_abs[samplepose]
+    sampled_edge = np.sort(np.concatenate([sampled_edge[1::], -sampled_edge[1::], np.array([0]), np.array([0.7])]))
 
-    t_norms = np.array(t_norms)
-    t_dirs = np.array(t_dirs)
-    depthnp_relfs = np.concatenate(depthnp_relfs)
-    angs = np.array(angs)
-
-    sampled_depth = get_reldepth_binrange(depthnp_relfs)
-    import pickle
-    pickle.dump(sampled_depth, open("/home/shengjie/Documents/supporting_projects/RAFT/EppflowCore/depth_bin.pickle", "wb"))
-
-    vlsroot = '/home/shengjie/Desktop/2021_02/2021_02_25'
-
-    plt.figure()
-    plt.hist(t_norms, bins=20)
-    plt.title("Kitti movement distance")
-    plt.savefig(os.path.join(vlsroot, 'mvdistance.png'))
-    plt.close()
-
-    plt.figure()
-    plt.hist(depthnp_relfs, bins=100)
-    for xc in sampled_depth:
+    import matplotlib.pyplot as plt
+    plt.hist(diffrecs, bins=100)
+    for xc in sampled_edge:
         plt.axvline(x=xc, ymin=-0.1, ymax=0.1, color='r', linestyle='dashed', linewidth=0.8)
-    plt.title("Kitti rel depth")
-    plt.savefig(os.path.join(vlsroot, 'reldepth.png'))
+    plt.title('Log Difference with gt normlaized deoth')
+    plt.savefig(os.path.join('/home/shengjie/Desktop/2021_03/2021_03_12', 'evaluation difference on log'))
     plt.close()
 
-    fig = plt.figure(figsize=(10, 9))
-    ax1 = fig.add_subplot(3, 1, 1)
-    plt.hist(t_dirs[:, 0], 20)
-    ax1.title.set_text('kitti self move direction on x')
-    ax2 = fig.add_subplot(3, 1, 2)
-    plt.hist(t_dirs[:, 1], 20)
-    ax2.title.set_text('kitti self move direction on y')
-    ax3 = fig.add_subplot(3, 1, 3)
-    plt.hist(t_dirs[:, 2], 20)
-    ax3.title.set_text('kitti self move direction on z')
-    plt.savefig(os.path.join(vlsroot, 'mvdirections.png'))
-    plt.close()
-
-    fig = plt.figure(figsize=(10, 9))
-    ax1 = fig.add_subplot(3, 1, 1)
-    plt.hist(angs[:, 0], 20)
-    ax1.title.set_text('kitti self rotation direction on x')
-    ax2 = fig.add_subplot(3, 1, 2)
-    plt.hist(angs[:, 1], 20)
-    ax2.title.set_text('kitti self rotation direction on y')
-    ax3 = fig.add_subplot(3, 1, 3)
-    plt.hist(angs[:, 2], 20)
-    ax3.title.set_text('kitti self rotation direction on z')
-    plt.savefig(os.path.join(vlsroot, 'rotirections.png'))
-    plt.close()
+    import pickle
+    with open('/home/shengjie/Documents/supporting_projects/RAFT/exp_nyu_v2/eppflowenet/depth_bin.pickle', 'wb') as handle:
+        pickle.dump(sampled_edge, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    return
 
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_nyu_v2/splits')
@@ -189,7 +158,7 @@ def read_splits():
     return evaluation_entries
 
 def train(args):
-    _, evaluation_entries = read_splits()
+    evaluation_entries = read_splits()
     get_eppflow_range(args, evaluation_entries)
     return
 
@@ -198,8 +167,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_root', type=str)
     parser.add_argument('--pred_root', type=str)
-    parser.add_argument('--num_workers', type=int, default=12)
-
+    parser.add_argument('--min_depth_eval', type=float, help='minimum depth for evaluation', default=1e-3)
+    parser.add_argument('--max_depth_eval', type=float, help='maximum depth for evaluation', default=10)
     args = parser.parse_args()
 
     train(args)
