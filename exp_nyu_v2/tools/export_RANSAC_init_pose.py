@@ -534,7 +534,7 @@ def read_splits(iters):
     if iters == 0:
         return train_entries + evaluation_entries
     else:
-        return evaluation_entries
+        return train_entries
 
 def train(processid, args, entries, iters=0):
     interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()
