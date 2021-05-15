@@ -164,10 +164,8 @@ def get_odomentries(args):
     import glob
     odomentries = list()
     odomseqs = [
-        '2011_10_03/2011_10_03_drive_0027_sync',
-        '2011_09_30/2011_09_30_drive_0016_sync',
-        '2011_09_30/2011_09_30_drive_0018_sync',
-        '2011_09_30/2011_09_30_drive_0027_sync'
+        '2011_09_30/2011_09_30_drive_0033_sync',
+        '2011_09_30/2011_09_30_drive_0034_sync'
     ]
     # odomseqs = \
     # ['2011_09_30/2011_09_30_drive_0016_sync']
