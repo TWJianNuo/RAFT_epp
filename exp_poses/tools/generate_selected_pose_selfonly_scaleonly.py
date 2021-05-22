@@ -165,9 +165,9 @@ def get_odomentries(args):
     odomentries = list()
     odomseqs = [
         '2011_10_03/2011_10_03_drive_0027_sync',
-        '2011_09_30/2011_09_30_drive_0016_sync',
+        # '2011_09_30/2011_09_30_drive_0016_sync',
         '2011_09_30/2011_09_30_drive_0018_sync',
-        '2011_09_30/2011_09_30_drive_0027_sync'
+        # '2011_09_30/2011_09_30_drive_0027_sync'
     ]
     # odomseqs = \
     # ['2011_09_30/2011_09_30_drive_0016_sync']
@@ -199,26 +199,28 @@ def read_splits(args):
             entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
             entries_expand.append(entry_expand)
     if args.odom_only:
-        tot_entries = odom_entries
+        tot_entries = odom_entries + evaluation_entries
     else:
         tot_entries = odom_entries + entries_expand + evaluation_entries
     tot_entries = list(set(tot_entries))
     tot_entries.sort()
 
-    export_root = get_export_name(args)
-    ungenerated_entries = list()
-    for entry in tot_entries:
-        seq, frmidx, _ = entry.split(' ')
-        if not os.path.exists(os.path.join(export_root, seq, "image_02/{}.pickle".format(str(frmidx).zfill(10)))):
-            ungenerated_entries.append(entry)
-    return ungenerated_entries
+    # export_root = get_export_name(args)
+    # ungenerated_entries = list()
+    # for entry in tot_entries:
+    #     seq, frmidx, _ = entry.split(' ')
+    #     if not os.path.exists(os.path.join(export_root, seq, "image_02/{}.pickle".format(str(frmidx).zfill(10)))):
+    #         ungenerated_entries.append(entry)
+    # return ungenerated_entries
+    return tot_entries
 
 def read_odomeval_splits():
     seqmapping = \
     ['00 2011_10_03_drive_0027 000000 004540',
-     "04 2011_09_30_drive_0016 000000 000270",
+     # "04 2011_09_30_drive_0016 000000 000270",
      "05 2011_09_30_drive_0018 000000 002760",
-     "07 2011_09_30_drive_0027 000000 001100"]
+     # "07 2011_09_30_drive_0027 000000 001100"
+     ]
 
     # seqmapping = \
     # ["04 2011_09_30_drive_0016 000000 000270"]

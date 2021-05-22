@@ -475,9 +475,9 @@ def get_odomentries(args):
     odomentries = list()
     odomseqs = [
         '2011_10_03/2011_10_03_drive_0027_sync',
-        '2011_09_30/2011_09_30_drive_0016_sync',
+        # '2011_09_30/2011_09_30_drive_0016_sync',
         '2011_09_30/2011_09_30_drive_0018_sync',
-        '2011_09_30/2011_09_30_drive_0027_sync'
+        # '2011_09_30/2011_09_30_drive_0027_sync'
     ]
     for odomseq in odomseqs:
         leftimgs = glob.glob(os.path.join(args.odom_root, odomseq, 'image_02/data', "*.png"))
@@ -489,9 +489,10 @@ def get_odomentries(args):
 def generate_seqmapping():
     seqmapping = \
     ['00 2011_10_03_drive_0027 000000 004540',
-     "04 2011_09_30_drive_0016 000000 000270",
+     # "04 2011_09_30_drive_0016 000000 000270",
      "05 2011_09_30_drive_0018 000000 002760",
-     "07 2011_09_30_drive_0027 000000 001100"]
+     # "07 2011_09_30_drive_0027 000000 001100"
+     ]
 
     entries = list()
     seqmap = dict()
@@ -558,7 +559,8 @@ def read_splits(args, it):
     else:
         exportentries = totentries
 
-    return exportentries
+    # return exportentries
+    return evaluation_entries + odom_entries
 
 
 def train(processid, args, entries, iters=0):
@@ -673,18 +675,22 @@ if __name__ == '__main__':
 
     time.sleep(args.delay)
 
-    if args.evalonly:
-        k = 0
-        seqmap, oval_entries = generate_seqmapping()
-        eval_generated_odom(args, seqmap, oval_entries, k)
-    else:
-        for k in range(args.stid, args.edid):
-            print("Start Iteration %d" % (k))
-            entries = read_splits(args, it=k)
-            if len(entries) == 0:
-                continue
-            mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+    # if args.evalonly:
+    #     k = 0
+    #     seqmap, oval_entries = generate_seqmapping()
+    #     eval_generated_odom(args, seqmap, oval_entries, k)
+    # else:
+    #     for k in range(args.stid, args.edid):
+    #         print("Start Iteration %d" % (k))
+    #         entries = read_splits(args, it=k)
+    #         if len(entries) == 0:
+    #             continue
+    #         mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+    #
+    #         if k < 4:
+    #             seqmap, oval_entries = generate_seqmapping()
+    #             eval_generated_odom(args, seqmap, oval_entries, k)
 
-            if k < 4:
-                seqmap, oval_entries = generate_seqmapping()
-                eval_generated_odom(args, seqmap, oval_entries, k)
+    k = 0
+    entries = read_splits(args, it=k)
+    mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))

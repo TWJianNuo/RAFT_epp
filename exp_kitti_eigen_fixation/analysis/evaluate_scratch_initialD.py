@@ -97,7 +97,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
-        # pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
+        pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
 

@@ -452,6 +452,10 @@ def train(gpu, ngpus_per_node, args):
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
+                
+        if args.gpu == 0:
+            PATH = os.path.join(logroot, 'epoch_{}.pth'.format(str(epoch).zfill(2)))
+            torch.save(model.state_dict(), PATH)
         epoch = epoch + 1
 
     if args.gpu == 0:

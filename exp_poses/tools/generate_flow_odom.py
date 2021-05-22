@@ -25,14 +25,14 @@ def get_odomentries(args):
     odomentries = list()
     odomseqs = [
         '2011_10_03_drive_0027',
-        '2011_10_03_drive_0042',
-        "2011_10_03_drive_0034",
-        "2011_09_26_drive_0067",
-        "2011_09_30_drive_0016",
+        # '2011_10_03_drive_0042',
+        # "2011_10_03_drive_0034",
+        # "2011_09_26_drive_0067",
+        # "2011_09_30_drive_0016",
         "2011_09_30_drive_0018",
-        "2011_09_30_drive_0020",
-        "2011_09_30_drive_0027",
-        "2011_09_30_drive_0028",
+        # "2011_09_30_drive_0020",
+        # "2011_09_30_drive_0027",
+        # "2011_09_30_drive_0028",
         "2011_09_30_drive_0033",
         "2011_09_30_drive_0034"
     ]
@@ -66,7 +66,7 @@ def read_splits(args):
             entry_expand = "{} {} {}".format(fold, frmidx.zfill(10), 'l')
             entries_expand.append(entry_expand)
 
-    tot_entries = odom_entries + entries_expand + evaluation_entries
+    tot_entries = odom_entries + evaluation_entries
     togen = list()
     for entry in tot_entries:
         seq, frmidx, dir = entry.split(' ')

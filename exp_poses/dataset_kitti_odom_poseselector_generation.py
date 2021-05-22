@@ -427,7 +427,7 @@ class KITTI_odom(data.Dataset):
 
         if posepred is not None:
             currentins = posepred.shape[1]
-            assert currentins == insmap.max() + 1
+            # assert currentins == insmap.max() + 1
             if currentins > self.maxinsnum:
                 for k in range(self.maxinsnum, currentins):
                     insmap[insmap == k] = 0
