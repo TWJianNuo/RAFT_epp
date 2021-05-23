@@ -24,8 +24,8 @@ import torch.multiprocessing as mp
 
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_nyu_v2/splits')
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_train_files.txt'), 'r')]
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_test_files.txt'), 'r')]
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_train_files.txt'), 'r')]
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_test_files.txt'), 'r')]
     return train_entries + evaluation_entries
 
 def remove_dup(entries):
@@ -52,11 +52,15 @@ def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, i
             seq, index = entry.split(' ')
             index = int(index)
 
-            img1path = os.path.join(args.dataset, seq, 'rgb_{}.jpg'.format(str(index).zfill(5)))
-            img2path = os.path.join(args.dataset, seq, 'rgb_{}.jpg'.format(str(index + 1).zfill(5)))
+            img1path = os.path.join(args.dataset, seq, 'rgb_{}.png'.format(str(index).zfill(5)))
+            img2path = os.path.join(args.dataset, seq, 'rgb_{}.png'.format(str(index + 1).zfill(5)))
 
-            if not os.path.exists(img2path):
+            if not os.path.exists(img2path) and not os.path.exists(img2path.replace('.png', '.jpg')):
                 img2path = img1path
+
+            if not os.path.exists(img1path):
+                img1path = img1path.replace('.png', '.jpg')
+                img2path = img2path.replace('.png', '.jpg')
 
             image1 = frame_utils.read_gen(img1path)
             image2 = frame_utils.read_gen(img2path)
