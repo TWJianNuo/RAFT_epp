@@ -92,17 +92,22 @@ def validate_kitti_colorjitter(gpu, model, args, ngpus_per_node, eval_entries, i
             image1 = np.array(image1).astype(np.uint8)
             image2 = np.array(image2).astype(np.uint8)
 
+            h, w, _ = image1.shape
+            crph = h - args.evalheight
+            image1 = image1[crph: h, 0: args.evalwidth, :]
+            image2 = image2[crph: h, 0: args.evalwidth, :]
+
             image1 = torch.from_numpy(image1).permute([2, 0, 1]).float()
             image2 = torch.from_numpy(image2).permute([2, 0, 1]).float()
 
             image1 = image1[None].cuda(gpu)
             image2 = image2[None].cuda(gpu)
 
-            padder = InputPadder(image1.shape, mode='kitti')
-            image1, image2 = padder.pad(image1, image2)
+            # padder = InputPadder(image1.shape, mode='kitti')
+            # image1, image2 = padder.pad(image1, image2)
 
             st = time.time()
-            flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
+            flow_low, flow_pr = model(image1, image2, iters=24, test_mode=True)
             dr += time.time() - st
             totnum += 1
             print("%d Samples, Ave sec/frame: %f, Mem: %f Gb" % (totnum, dr / totnum, float(torch.cuda.memory_allocated() / 1024 / 1024 / 1024)))
