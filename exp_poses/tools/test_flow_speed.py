@@ -46,7 +46,7 @@ def read_splits(args):
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     odom_entries = get_odomentries(args)
 
-    return odom_entries + train_entries + evaluation_entries
+    return train_entries + evaluation_entries
 
 def remove_dup(entries):
     dupentry = list()
