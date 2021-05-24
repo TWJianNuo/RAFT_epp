@@ -288,10 +288,10 @@ class silog_loss(nn.Module):
 
 def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_nyu_v2/splits')
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_train_files.txt'), 'r')]
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_train_files.txt'), 'r')]
     # train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_train_files (copy).txt'), 'r')]
 
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_test_files.txt'), 'r')]
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_test_files.txt'), 'r')]
     return train_entries, evaluation_entries
 
 def get_reprojection_loss(img1, insmap, outputs, ssim):
