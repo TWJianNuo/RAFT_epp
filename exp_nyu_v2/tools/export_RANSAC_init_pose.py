@@ -114,8 +114,13 @@ class NYUV2(data.Dataset):
             seq, index = entry.split(' ')
             index = int(index)
 
-            img1path = os.path.join(self.root, seq, 'rgb_{}.jpg'.format(str(index).zfill(5)))
-            img2path = os.path.join(self.root, seq, 'rgb_{}.jpg'.format(str(index + 1).zfill(5)))
+            img1path = os.path.join(self.root, seq, 'rgb_{}.png'.format(str(index).zfill(5)))
+            img2path = os.path.join(self.root, seq, 'rgb_{}.png'.format(str(index + 1).zfill(5)))
+
+            if not os.path.exists(img1path):
+                img1path = img1path.replace('.png', '.jpg')
+                img2path = img2path.replace('.png', '.jpg')
+
             depthpath = os.path.join(self.root, seq, 'sync_depth_{}.png'.format(str(index).zfill(5)))
 
             mdDepth_path = os.path.join(self.mdPred_root, str(iter).zfill(3), seq, "sync_depth_{}.png".format(str(index).zfill(5)))
@@ -528,8 +533,8 @@ def validate_RANSAC_odom_relpose(args, eval_loader, samplenum=50000, iters=0):
 
 def read_splits(iters):
     split_root = os.path.join(project_rootdir, 'exp_nyu_v2/splits')
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_train_files.txt'), 'r')]
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_test_files.txt'), 'r')]
+    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_train_files.txt'), 'r')]
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_test_files.txt'), 'r')]
 
     if iters == 0:
         return train_entries + evaluation_entries
