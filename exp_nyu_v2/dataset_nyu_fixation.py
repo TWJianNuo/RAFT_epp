@@ -204,8 +204,13 @@ class NYUV2(data.Dataset):
             seq, index = entry.split(' ')
             index = int(index)
 
-            img1path = os.path.join(self.root, seq, 'rgb_{}.jpg'.format(str(index).zfill(5)))
-            img2path = os.path.join(self.root, seq, 'rgb_{}.jpg'.format(str(index + 1).zfill(5)))
+            img1path = os.path.join(self.root, seq, 'rgb_{}.png'.format(str(index).zfill(5)))
+            img2path = os.path.join(self.root, seq, 'rgb_{}.png'.format(str(index + 1).zfill(5)))
+
+            if not os.path.exists(img1path):
+                img1path = img1path.replace('.png', '.jpg')
+                img2path = img2path.replace('.png', '.jpg')
+
             depthpath = os.path.join(self.root, seq, 'sync_depth_{}.png'.format(str(index).zfill(5)))
             mdDepth_path = os.path.join(self.mdPred_root, "{}", seq, "sync_depth_{}.png".format(str(index).zfill(5)))
             posepath = os.path.join(self.RANSACPose_root, "{}", seq, "{}.pickle".format(str(index).zfill(5)))

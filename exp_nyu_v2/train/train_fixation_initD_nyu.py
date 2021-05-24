@@ -474,8 +474,6 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.00002)
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
-    # parser.add_argument('--inheight', type=int, default=448)
-    # parser.add_argument('--inwidth', type=int, default=640)
     parser.add_argument('--inheight', type=int, default=448)
     parser.add_argument('--inwidth', type=int, default=448)
     parser.add_argument('--evalheight', type=int, default=448)
