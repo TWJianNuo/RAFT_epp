@@ -239,6 +239,9 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
+        if args.mean_scale:
+            pred_depth_flatten = pred_depth_flatten / np.mean(pred_depth_flatten) * np.mean(depth_gt_flatten)
+
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
 
         eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
@@ -396,6 +399,7 @@ if __name__ == '__main__':
     parser.add_argument('--flowpred_root', type=str)
     parser.add_argument('--logroot', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
+    parser.add_argument('--mean_scale', action="store_true")
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
