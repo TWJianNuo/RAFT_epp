@@ -39,6 +39,28 @@ from tqdm import tqdm
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def scale_invariant(gt, pr):
+    """
+    Computes the scale invariant loss based on differences of logs of depth maps.
+    Takes preprocessed depths (no nans, infs and non-positive values)
+    depth1:  one depth map
+    depth2:  another depth map
+    Returns:
+        scale_invariant_distance
+    """
+    gt = gt.reshape(-1)
+    pr = pr.reshape(-1)
+
+    v = gt > 0.1
+    gt = gt[v]
+    pr = pr[v]
+
+    log_diff = np.log(gt) - np.log(pr)
+    num_pixels = np.float32(log_diff.size)
+
+    # sqrt(Eq. 3)
+    return np.sqrt(np.sum(np.square(log_diff)) / num_pixels - np.square(np.sum(log_diff)) / np.square(num_pixels))
+
 def compute_errors(gt, pred):
     thresh = np.maximum((gt / pred), (pred / gt))
 
@@ -60,6 +82,8 @@ def compute_errors(gt, pred):
 
     err = np.abs(np.log10(pred) - np.log10(gt))
     log10 = np.mean(err)
+
+    sc_inv = scale_invariant(gt, pred)
 
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 

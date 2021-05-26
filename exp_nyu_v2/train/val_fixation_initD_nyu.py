@@ -182,6 +182,28 @@ class Logger:
     def close(self):
         self.writer.close()
 
+def scale_invariant(gt, pr):
+    """
+    Computes the scale invariant loss based on differences of logs of depth maps.
+    Takes preprocessed depths (no nans, infs and non-positive values)
+    depth1:  one depth map
+    depth2:  another depth map
+    Returns:
+        scale_invariant_distance
+    """
+    gt = gt.reshape(-1)
+    pr = pr.reshape(-1)
+
+    v = gt > 0.1
+    gt = gt[v]
+    pr = pr[v]
+
+    log_diff = np.log(gt) - np.log(pr)
+    num_pixels = np.float32(log_diff.size)
+
+    # sqrt(Eq. 3)
+    return np.sqrt(np.sum(np.square(log_diff)) / num_pixels - np.square(np.sum(log_diff)) / np.square(num_pixels))
+
 def compute_errors(gt, pred):
     thresh = np.maximum((gt / pred), (pred / gt))
 
@@ -204,7 +226,8 @@ def compute_errors(gt, pred):
     err = np.abs(np.log10(pred) - np.log10(gt))
     log10 = np.mean(err)
 
-    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
+    sc_inv = scale_invariant(gt, pred)
+    return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3, sc_inv]
 
 @torch.no_grad()
 def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
@@ -257,8 +280,8 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
             print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
         else:
             print('Computing Depth errors for %f eval samples, masked: %f' % (eval_measures_depth[9].item(), maskednum))
-        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3'))
-        for i in range(8):
+        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+        for i in range(9):
             print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
         print('{:7.3f}'.format(eval_measures_depth[8]))
 
@@ -418,10 +441,13 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
     ngpus_per_node = torch.cuda.device_count()
 
-    import glob
-    all_models = glob.glob(os.path.join(args.restore_ckpt, '*.pth'))
-    all_models.sort()
-    all_models = all_models[::-1]
+    if '.pth' not in args.restore_ckpt:
+        import glob
+        all_models = glob.glob(os.path.join(args.restore_ckpt, '*.pth'))
+        all_models.sort()
+        all_models = all_models[::-1]
+    else:
+        all_models = [args.restore_ckpt]
 
     if args.distributed:
         args.world_size = ngpus_per_node
