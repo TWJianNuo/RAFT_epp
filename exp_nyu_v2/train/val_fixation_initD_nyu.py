@@ -235,7 +235,7 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     gpu = args.gpu
-    eval_measures_depth = torch.zeros(10).cuda(device=gpu)
+    eval_measures_depth = torch.zeros(11).cuda(device=gpu)
     maskednum = 0
 
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
@@ -267,19 +267,19 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
 
-        eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
-        eval_measures_depth[9] += 1
+        eval_measures_depth[:10] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
+        eval_measures_depth[10] += 1
 
     if args.distributed:
         dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
 
     if args.gpu == 0:
-        eval_measures_depth[0:9] = eval_measures_depth[0:9] / eval_measures_depth[9]
+        eval_measures_depth[0:10] = eval_measures_depth[0:10] / eval_measures_depth[10]
         eval_measures_depth = eval_measures_depth.cpu().numpy()
         if not domask:
-            print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
+            print('Computing Depth errors for %f eval samples' % (eval_measures_depth[10].item()))
         else:
-            print('Computing Depth errors for %f eval samples, masked: %f' % (eval_measures_depth[9].item(), maskednum))
+            print('Computing Depth errors for %f eval samples, masked: %f' % (eval_measures_depth[10].item(), maskednum))
         print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
         for i in range(9):
             print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
@@ -293,7 +293,8 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
                 'log_rms': float(eval_measures_depth[5]),
                 'd1': float(eval_measures_depth[6]),
                 'd2': float(eval_measures_depth[7]),
-                'd3': float(eval_measures_depth[8])
+                'd3': float(eval_measures_depth[8]),
+                'sc_inv': float(eval_measures_depth[9])
                 }
     else:
         return None
