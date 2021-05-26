@@ -283,7 +283,7 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
         print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
         for i in range(9):
             print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
-        print('{:7.3f}'.format(eval_measures_depth[8]))
+        print('{:7.3f}'.format(eval_measures_depth[9]))
 
         return {'silog': float(eval_measures_depth[0]),
                 'abs_rel': float(eval_measures_depth[1]),
