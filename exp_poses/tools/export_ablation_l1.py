@@ -348,7 +348,7 @@ def select_scale(scale_md, R, t, pts1_inliers, pts2_inliers, mdDepth_npf, intrin
     # plt.show()
     return scale_md_cand[best], best
 
-def inf_pose_flow(flow_pr_inf, insmap, mdDepth, intrinsic, pid, gradComputer=None, banins=False, samplenum=50000):
+def inf_pose_flow(flow_pr_inf, insmap, mdDepth, intrinsic, pid, gradComputer=None, banins=False, samplenum=50000, npose=None):
     insmap_np = insmap[0, 0].cpu().numpy()
     intrinsicnp = intrinsic[0].cpu().numpy()
     dummyh = 370
@@ -394,6 +394,9 @@ def inf_pose_flow(flow_pr_inf, insmap, mdDepth, intrinsic, pid, gradComputer=Non
 
     E, inliers = cv2.findEssentialMat(pts1, pts2, focal=intrinsicnp[0,0], pp=(intrinsicnp[0, 2], intrinsicnp[1, 2]), method=cv2.RANSAC, prob=0.99, threshold=0.1)
     cheirality_cnt, R, t, _ = cv2.recoverPose(E, pts1, pts2, focal=intrinsicnp[0, 0], pp=(intrinsicnp[0, 2], intrinsicnp[1, 2]))
+    R = npose[0:3, 0:3]
+    t = npose[0:3, 3:4]
+    t = t / np.sqrt(np.sum(t ** 2) + 1e-8)
 
     inliers_mask = inliers == 1
     inliers_mask = np.squeeze(inliers_mask, axis=1)
@@ -484,6 +487,11 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
         tag = data_blob['tag'][0]
 
         seq, frmidx = tag.split(' ')
+
+        npose_path = os.path.join(args.bsposepred_root, seq, 'image_02', frmidx.zfill(10) + '.pickle')
+        npose = pickle.load(open(npose_path, "rb"))[0]
+
+
         exportfold = os.path.join(args.export_root, str(iters).zfill(3), seq, 'image_02')
         os.makedirs(exportfold, exist_ok=True)
         export_root = os.path.join(exportfold, frmidx.zfill(10) + '.pickle')
@@ -493,7 +501,7 @@ def validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=False,
             t = np.array([[0, 0, -1]]).T
             scale = 0
         else:
-            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum)
+            R, t, scale, _ = inf_pose_flow(flowpred, insmap, mdDepth_pred, intrinsic, int(iters * eval_loader.__len__() + val_id), gradComputer=gradComputer, banins=banins, samplenum=samplenum, npose=npose)
         self_pose = np.eye(4)
         self_pose[0:3, 0:3] = R
         self_pose[0:3, 3:4] = t * scale
@@ -649,7 +657,7 @@ if __name__ == '__main__':
     parser.add_argument('--banins', action='store_true')
     parser.add_argument('--bangrad', action='store_true')
     parser.add_argument('--samplenum', type=int, default=50000)
-    parser.add_argument('--nprocs', type=int, default=1)
+    parser.add_argument('--nprocs', type=int, default=3)
 
     parser.add_argument('--export_root', type=str)
     parser.add_argument('--seqid', type=str)
@@ -660,6 +668,6 @@ if __name__ == '__main__':
 
     entries = read_splits(args)
     seqmap, oval_entries = generate_seqmapping(args)
-    for iter in range(5):
-        mp.spawn(train, nprocs=args.nprocs, args=(args, entries, iter))
-        eval_generated_odom(args, seqmap, oval_entries, iter)
+    # for iter in range(5):
+    mp.spawn(train, nprocs=args.nprocs, args=(args, entries, 0))
+    eval_generated_odom(args, seqmap, oval_entries, 0)
