@@ -181,7 +181,7 @@ def train(gpu, ngpus_per_node, args):
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, mdPred_root=args.mdPred_root,
                                ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=0, drop_last=False, sampler=eval_sampler)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
     print("Test splits contain %d images" % (eval_dataset.__len__()))
 
