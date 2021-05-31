@@ -157,8 +157,8 @@ def read_splits():
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     seqmap, odom_entries = generate_seqmapping()
-    # return evaluation_entries + odom_entries
-    return evaluation_entries
+    return evaluation_entries + odom_entries
+    # return evaluation_entries
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
