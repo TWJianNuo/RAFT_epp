@@ -180,7 +180,8 @@ def read_splits(args):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
-    odom_entries = get_odomentries(args)
+    # odom_entries = get_odomentries(args)
+    odom_entries, seqmap = read_odomeval_splits()
 
     entries = train_entries
     folds = list()
