@@ -535,6 +535,11 @@ def train(gpu, ngpus_per_node, args):
                 break
         epoch = epoch + 1
 
+        if args.gpu == 0:
+            PATH = os.path.join(logroot, 'epoch_{}.pth'.format(str(epoch).zfill(2)))
+            print("Save model to %s" % PATH)
+            torch.save(model.state_dict(), PATH)
+
     if args.gpu == 0:
         logger.close()
         PATH = os.path.join(logroot, 'final.pth')
