@@ -127,38 +127,28 @@ def validate_kitti(model, args, eval_loader):
         os.makedirs(fold_root, exist_ok=True)
         Image.fromarray(predread_np_orgsize).save(img_root)
 
-
-
 MAX_FLOW = 400
 
-def generate_seqmapping():
-    seqmapping = [
-        '00 2011_10_03_drive_0027 000000 004540',
-        '05 2011_09_30_drive_0018 000000 002760'
+def get_odomentries(args):
+    import glob
+    odomentries = list()
+    odomseqs = [
+        '2011_10_03/2011_10_03_drive_0027_sync',
+        '2011_09_30/2011_09_30_drive_0018_sync',
     ]
+    for odomseq in odomseqs:
+        leftimgs = glob.glob(os.path.join(args.odom_root, odomseq, 'image_02/data', "*.png"))
+        for leftimg in leftimgs:
+            imgname = os.path.basename(leftimg)
+            odomentries.append("{} {} {}".format(odomseq, imgname.rstrip('.png'), 'l'))
+    return odomentries
 
-    entries = list()
-    seqmap = dict()
-    for seqm in seqmapping:
-        mapentry = dict()
-        mapid, seqname, stid, enid = seqm.split(' ')
-        mapentry['mapid'] = int(mapid)
-        mapentry['stid'] = int(stid)
-        mapentry['enid'] = int(enid)
-        seqmap[seqname] = mapentry
-
-        for k in range(int(stid), int(enid)):
-            entries.append("{}/{}_sync {} {}".format(seqname[0:10], seqname, str(k).zfill(10), 'l'))
-
-    return seqmap, entries
-
-def read_splits():
+def read_splits(args):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
-    seqmap, odom_entries = generate_seqmapping()
-    return evaluation_entries + odom_entries
-    # return evaluation_entries
+    odom_entries = get_odomentries(args)
+    return evaluation_entries + odom_entries + train_entries
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -187,7 +177,7 @@ def train(gpu, ngpus_per_node, args):
         checkpoint = torch.load(args.restore_ckpt, map_location=loc)
         model.load_state_dict(checkpoint, strict=False)
 
-    evaluation_entries = read_splits()
+    evaluation_entries = read_splits(args)
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, mdPred_root=args.mdPred_root,
@@ -196,9 +186,6 @@ def train(gpu, ngpus_per_node, args):
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
     print("Test splits contain %d images" % (eval_dataset.__len__()))
-
-    if args.distributed:
-        group = dist.new_group([i for i in range(ngpus_per_node)])
 
     validate_kitti(model.module, args, eval_loader)
     return
@@ -295,6 +282,7 @@ if __name__ == '__main__':
     parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
     parser.add_argument('--export_root', type=str)
+    parser.add_argument('--odom_root', type=str)
 
     parser.add_argument('--distributed', default=True, type=bool)
     parser.add_argument('--dist_url', type=str, help='url used to set up distributed training', default='tcp://127.0.0.1:1235')
