@@ -310,7 +310,6 @@ if __name__ == '__main__':
 
     ngpus_per_node = torch.cuda.device_count()
 
-    validate_kitti_gen()
     if args.distributed:
         args.world_size = ngpus_per_node
         mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
