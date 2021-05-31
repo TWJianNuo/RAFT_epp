@@ -448,7 +448,8 @@ class KITTI_eigen(data.Dataset):
             crpw = w
 
         if self.istrain:
-            left = np.random.randint(0, w - crpw - 1, 1).item()
+            stleft = int((w - 1216) / 2)
+            left = np.random.randint(stleft, 1216 - crpw - 1, 1).item()
         else:
             left = int((w - crpw) / 2)
         top = int(h - crph)
@@ -476,6 +477,7 @@ class KITTI_eigen(data.Dataset):
             depthpred_deepv2d = self.crop_img(depthpred_deepv2d, left=left, top=top, crph=crph, crpw=crpw)
         if mdDepth_pred is not None:
             mdDepth_pred = self.crop_img(mdDepth_pred, left=left, top=top, crph=crph, crpw=crpw)
+            assert mdDepth_pred.min() > 0
         if flowpred_RAFT is not None:
             flowpred_RAFT = self.crop_img(flowpred_RAFT, left=left, top=top, crph=crph, crpw=crpw)
 
