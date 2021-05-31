@@ -101,7 +101,8 @@ class Logger:
         insvls = vls_ins(img1, insmap)
 
         depthpredvls = tensor2disp(1 / outputs[('depth', 2)], vmax=0.15, viewind=0)
-        flowvls = flow_to_image(outputs[('flowpred', 2)][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=10)
+        flowvls = tensor2disp(1 / data_blob['mdDepth_pred'], vmax=0.15, viewind=0)
+        # flowvls = flow_to_image(outputs[('flowpred', 2)][0].detach().cpu().permute([1, 2, 0]).numpy(), rad_max=10)
         imgrecon = tensor2rgb(outputs[('reconImg', 2)], viewind=0)
 
         img_val_up = np.concatenate([np.array(insvls), np.array(img2)], axis=1)
