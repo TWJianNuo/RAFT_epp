@@ -157,7 +157,8 @@ def read_splits():
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
     seqmap, odom_entries = generate_seqmapping()
-    return evaluation_entries + odom_entries
+    # return evaluation_entries + odom_entries
+    return evaluation_entries
 
 def train(gpu, ngpus_per_node, args):
     print("Using GPU %d for training" % gpu)
@@ -201,6 +202,49 @@ def train(gpu, ngpus_per_node, args):
 
     validate_kitti(model.module, args, eval_loader)
     return
+
+def validate_kitti_gen():
+    split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
+    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
+    eval_measures_depth_nps = list()
+    totcount = 0
+    for val_id, entry in enumerate(tqdm(evaluation_entries)):
+        seq, frmidx, _ = entry.split(' ')
+        depthgt_path = os.path.join(args.depth_root, seq, "image_02/{}.png".format(str(frmidx).zfill(10)))
+        depthpred_path = os.path.join(args.export_root, seq, "image_02/{}.png".format(str(frmidx).zfill(10)))
+
+        if not os.path.exists(depthgt_path):
+            continue
+        totcount += 1
+
+        depthgt = np.array(Image.open(depthgt_path)).astype(np.float32) / 256.0
+        depthpred = np.array(Image.open(depthpred_path)).astype(np.float32) / 256.0
+
+        orgh, orgw = depthgt.shape
+
+        crop = np.array([0.40810811 * orgh, 0.99189189 * orgh, 0.03594771 * orgw, 0.96405229 * orgw]).astype(np.int32)
+        crop_mask = np.zeros([orgh, orgw])
+        crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1
+        depthgt = depthgt * crop_mask
+
+        selector = ((depthgt > 0) * (depthpred > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval)).astype(np.float32)
+        depthpred = np.clip(depthpred, a_min=args.min_depth_eval, a_max=args.max_depth_eval)
+        depth_gt_flatten = depthgt[selector == 1]
+        pred_depth_flatten = depthpred[selector == 1]
+
+        pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
+
+        eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
+        eval_measures_depth_nps.append(eval_measures_depth_np)
+    eval_measures_depth_nps = np.array(eval_measures_depth_nps)
+    eval_measures_depth_nps = np.mean(eval_measures_depth_nps, axis=0)
+    print('Computing Depth errors for %f eval samples' % (totcount))
+    print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms',
+                                                                                 'sq_rel', 'log_rms', 'd1', 'd2', 'd3'))
+    for i in range(8):
+        print('{:7.3f}, '.format(eval_measures_depth_nps[i]), end='')
+    print('{:7.3f}'.format(eval_measures_depth_nps[8]))
+
 
 
 if __name__ == '__main__':
@@ -266,8 +310,10 @@ if __name__ == '__main__':
 
     ngpus_per_node = torch.cuda.device_count()
 
+    validate_kitti_gen()
     if args.distributed:
         args.world_size = ngpus_per_node
         mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
     else:
         train(args.gpu, ngpus_per_node, args)
+
