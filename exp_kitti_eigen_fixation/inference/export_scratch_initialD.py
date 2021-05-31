@@ -21,7 +21,7 @@ import torch.nn.functional as F
 import time
 
 from torch.utils.data import DataLoader
-from exp_kitti_eigen_fixation.dataset_kitti_eigen_fixation import KITTI_eigen
+from exp_kitti_eigen_fixation.inference.dataset_gen_ours_only import KITTI_eigen
 from exp_kitti_eigen_fixation.eppflowenet.EppFlowNet_scale_initialD import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
@@ -101,6 +101,15 @@ def validate_kitti(model, args, eval_loader):
         posepred = data_blob['posepred'].cuda(gpu)
         tag = data_blob['tag'][0]
         seq, frmidx = tag.split(' ')
+        size_str = data_blob['size_str'][0]
+        orgh, orgw = size_str.split('_')
+        orgh = int(orgh)
+        orgw = int(orgw)
+
+        left = int((orgw - args.evalwidth) / 2)
+        top = int(orgh - args.evalheight)
+
+        predread_np_orgsize = np.zeros([orgh, orgw])
 
         mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
 
@@ -109,12 +118,14 @@ def validate_kitti(model, args, eval_loader):
         outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
         predread = outputs[('depth', 2)]
         predread_np = predread.squeeze().cpu().numpy()
-        predread_np = (predread_np * 256.0).astype(np.uint16)
+        predread_np_orgsize[top:top+args.evalheight, left:left+args.evalwidth] = predread_np
+
+        predread_np_orgsize = (predread_np_orgsize * 256.0).astype(np.uint16)
 
         fold_root = os.path.join(args.export_root, seq, 'image_02')
         img_root = os.path.join(fold_root, '{}.png'.format(frmidx))
         os.makedirs(fold_root, exist_ok=True)
-        Image.fromarray(predread_np).save(img_root)
+        Image.fromarray(predread_np_orgsize).save(img_root)
 
 
 
@@ -179,7 +190,7 @@ def train(gpu, ngpus_per_node, args):
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, mdPred_root=args.mdPred_root,
-                               ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
+                               ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap, bandepth=True)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
