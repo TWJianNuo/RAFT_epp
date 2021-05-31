@@ -317,3 +317,4 @@ if __name__ == '__main__':
     else:
         train(args.gpu, ngpus_per_node, args)
 
+    validate_kitti_gen()
