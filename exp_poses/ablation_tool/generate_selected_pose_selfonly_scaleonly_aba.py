@@ -377,8 +377,7 @@ if __name__ == '__main__':
         for s in seqmap.keys():
             posrec = dict()
 
-            pred_pose_root = get_export_name(args)
-            pred_pose_root = os.path.join(args.export_root, pred_pose_root)
+            pred_pose_root = args.export_root
             pred_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
                 pred_pose_path = os.path.join(pred_pose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
@@ -387,7 +386,7 @@ if __name__ == '__main__':
 
             RANSAC_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
 

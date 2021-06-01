@@ -354,11 +354,11 @@ if __name__ == '__main__':
         args.RANSACPose_root = fold_to_gen
         subfold_name = fold_to_gen.split('/')[-2]
         args.export_root = os.path.join(export_root, subfold_name)
-        if args.distributed:
-            args.world_size = ngpus_per_node
-            mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
-        else:
-            train(args.gpu, ngpus_per_node, args)
+        # if args.distributed:
+        #     args.world_size = ngpus_per_node
+        #     mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        # else:
+        #     train(args.gpu, ngpus_per_node, args)
 
         valentries, seqmap = read_odomeval_splits()
 
@@ -372,8 +372,7 @@ if __name__ == '__main__':
         for s in seqmap.keys():
             posrec = dict()
 
-            pred_pose_root = get_export_name(args)
-            pred_pose_root = os.path.join(args.export_root, pred_pose_root)
+            pred_pose_root = args.export_root
             pred_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
                 pred_pose_path = os.path.join(pred_pose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
@@ -382,7 +381,7 @@ if __name__ == '__main__':
 
             RANSAC_poses = list()
             for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                RANSAC_pose_path = os.path.join(args.RANSACPose_root, "000", s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
+                RANSAC_pose_path = os.path.join(args.RANSACPose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
 
