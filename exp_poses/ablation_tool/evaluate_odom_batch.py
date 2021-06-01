@@ -339,7 +339,7 @@ class KittiEvalOdom():
         ave_t_err, ave_r_err = self.compute_overall_err(seq_err)
         print("Sequence:%s, No Align Translational error : %f , Rotational error (deg/100m): %f" % (str(seq).zfill(2), ave_t_err * 100, ave_r_err / np.pi * 180 * 100))
         # print("No Align Rotational error (deg/100m): ", ave_r_err / np.pi * 180 * 100)
-
+        return ave_t_err, ave_r_err
 
 if __name__ == '__main__':
     import argparse
@@ -363,6 +363,8 @@ if __name__ == '__main__':
     pred_folds = glob(os.path.join(args.prediction_root, '*/'))
     pred_folds.sort()
     for seq in seqids:
+        ave_t_errs = list()
+        ave_r_errs = list()
         for pred_fold in pred_folds:
             if '_txt' not in pred_fold:
                 continue
@@ -372,4 +374,11 @@ if __name__ == '__main__':
             args.seq = seq
             args.gt_txt = os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses/{}.txt'.format(str(seq).zfill(2)))
             args.result_txt = os.path.join(pred_fold, '{}.txt'.format(str(seq).zfill(2)))
-            eval_tool.eval(args.gt_txt, args.result_txt, seq=args.seq)
+            ave_t_err, ave_r_err = eval_tool.eval(args.gt_txt, args.result_txt, seq=args.seq)
+            ave_t_errs.append(ave_t_err)
+            ave_r_errs.append(ave_r_err)
+
+        print("=================Tot:{}==========================".format(pred_fold.split('/')[-2]))
+        ave_t_errs = np.mean(np.array(ave_t_errs))
+        ave_r_errs = np.mean(np.array(ave_r_errs))
+        print("Sequence:%s, No Align Translational error : %f , Rotational error (deg/100m): %f" % (str(seq).zfill(2), ave_t_errs * 100, ave_r_errs / np.pi * 180 * 100))
