@@ -131,6 +131,9 @@ def validate_kitti(model, args, eval_loader):
         posepred = data_blob['posepred'].cuda(gpu)
         tag = data_blob['tag'][0]
 
+        seq = tag.split(' ')[0].split('/')[1][0:21]
+        frmid = tag.split(' ')[1]
+
         export_folder = os.path.join(args.export_root, seq[0:10], seq + "_sync", 'image_02')
         os.makedirs(export_folder, exist_ok=True)
         export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
@@ -148,9 +151,6 @@ def validate_kitti(model, args, eval_loader):
 
         outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, ang_decps_pad, scl_decps_pad, mvd_decps_pad, insmap)
         poseselected = outputs[('afft_all', 2)][0, -1]
-
-        seq = tag.split(' ')[0].split('/')[1][0:21]
-        frmid = tag.split(' ')[1]
 
         RANSAC_pose_path = os.path.join(args.RANSACPose_root, seq[0:10], seq + "_sync", 'image_02', "{}.pickle".format(str(frmid).zfill(10)))
         RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
