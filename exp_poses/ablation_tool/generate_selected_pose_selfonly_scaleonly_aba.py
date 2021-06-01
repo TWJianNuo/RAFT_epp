@@ -211,7 +211,7 @@ def read_splits(args):
     #     if not os.path.exists(os.path.join(export_root, seq, "image_02/{}.pickle".format(str(frmidx).zfill(10)))):
     #         ungenerated_entries.append(entry)
     # return ungenerated_entries
-    return tot_entries
+    return evaluation_entries + odom_entries
 
 def read_odomeval_splits():
     seqmapping = \
