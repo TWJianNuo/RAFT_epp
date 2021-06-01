@@ -354,11 +354,11 @@ if __name__ == '__main__':
         args.RANSACPose_root = fold_to_gen
         subfold_name = fold_to_gen.split('/')[-2]
         args.export_root = os.path.join(export_root, subfold_name)
-        # if args.distributed:
-        #     args.world_size = ngpus_per_node
-        #     mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
-        # else:
-        #     train(args.gpu, ngpus_per_node, args)
+        if args.distributed:
+            args.world_size = ngpus_per_node
+            mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        else:
+            train(args.gpu, ngpus_per_node, args)
 
         valentries, seqmap = read_odomeval_splits()
 
