@@ -361,12 +361,9 @@ if __name__ == '__main__':
         #     train(args.gpu, ngpus_per_node, args)
 
         valentries, seqmap = read_odomeval_splits()
-
         tot_err = dict()
         tot_err['positions_pred'] = 0
         tot_err['positions_RANSAC'] = 0
-        tot_err['positions_Deepv2d'] = 0
-        tot_err['positions_RANSAC_Deepv2dscale'] = 0
         tot_err['positions_RANSAC_Odomscale'] = 0
 
         for s in seqmap.keys():
@@ -384,12 +381,6 @@ if __name__ == '__main__':
                 RANSAC_pose_path = os.path.join(args.RANSACPose_root, s[0:10], s + "_sync", 'image_02', "{}.pickle".format(str(k).zfill(10)))
                 RANSAC_pose = pickle.load(open(RANSAC_pose_path, "rb"))
                 RANSAC_poses.append(RANSAC_pose[0])
-
-            Deepv2d_poses = list()
-            for k in range(int(seqmap[s]['stid']), int(seqmap[s]['enid'])):
-                Deepv2d_pose_path = os.path.join(args.deepv2dPose_root, s[0:10], s + "_sync", 'posepred', "{}.txt".format(str(k).zfill(10)))
-                Deepv2d_pose = read_deepv2d_pose(Deepv2d_pose_path)
-                Deepv2d_poses.append(Deepv2d_pose)
 
             gtposes_sourse = readlines(os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses', "{}.txt".format(str(seqmap[s]['mapid']).zfill(2))))
             gtposes = list()
@@ -443,27 +434,6 @@ if __name__ == '__main__':
             positions_RANSAC = np.array(positions_RANSAC)
             scale_RANSAC = np.array(scale_RANSAC)
 
-            positions_Deepv2d = list()
-            scale_Deepv2d = list()
-            stpos = np.array([[0, 0, 0, 1]]).T
-            accumP = np.eye(4)
-            for i, d in enumerate(Deepv2d_poses):
-                # d[0:3, 3] = d[0:3, 3] / np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10) * np.sqrt(np.sum(relposes[i][0:3, 3] ** 2) + 1e-10)
-                accumP = d @ accumP
-                positions_Deepv2d.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
-                scale_Deepv2d.append(np.sqrt(np.sum(d[0:3, 3] ** 2) + 1e-10))
-            positions_Deepv2d = np.array(positions_Deepv2d)
-            scale_Deepv2d = np.array(scale_Deepv2d)
-
-            positions_RANSAC_Deepv2dscale = list()
-            stpos = np.array([[0, 0, 0, 1]]).T
-            accumP = np.eye(4)
-            for i, r in enumerate(RANSAC_poses):
-                r[0:3, 3] = r[0:3, 3] / np.sqrt(np.sum(r[0:3, 3] ** 2) + 1e-10) * np.sqrt(np.sum(Deepv2d_poses[i][0:3, 3] ** 2) + 1e-10)
-                accumP = r @ accumP
-                positions_RANSAC_Deepv2dscale.append((np.linalg.inv(extrinsic) @ np.linalg.inv(accumP) @ stpos)[0:3, 0])
-            positions_RANSAC_Deepv2dscale = np.array(positions_RANSAC_Deepv2dscale)
-
             positions_RANSAC_Odomscale = list()
             stpos = np.array([[0, 0, 0, 1]]).T
             accumP = np.eye(4)
@@ -475,14 +445,11 @@ if __name__ == '__main__':
 
             posrec['positions_pred'] = positions_pred
             posrec['positions_RANSAC'] = positions_RANSAC
-            posrec['positions_Deepv2d'] = positions_Deepv2d
-            posrec['positions_RANSAC_Deepv2dscale'] = positions_RANSAC_Deepv2dscale
             posrec['positions_RANSAC_Odomscale'] = positions_RANSAC_Odomscale
 
             scalerec = dict()
             scalerec['scale_pred'] = scale_pred
             scalerec['scale_RANSAC'] = scale_RANSAC
-            scalerec['scale_Deepv2d'] = scale_Deepv2d
 
             print("============= %s ============" % (s))
             print("In total %d images," % positions_odom.shape[0])
@@ -496,16 +463,3 @@ if __name__ == '__main__':
 
                 tot_err[k] += err_odom * len(pred_poses)
                 print("%s, err_odom: %f, err_scale: %f" % (k, err_odom.item(), err_scale.item()))
-
-            # vls_fold = os.path.join(pred_pose_root, 'vls')
-            # os.makedirs(vls_fold, exist_ok=True)
-            # plt.figure(figsize=(16, 16))
-            # plt.scatter(positions_odom[:, 0], positions_odom[:, 1], 0.5)
-            # plt.scatter(positions_RANSAC_Deepv2dscale[:, 0], positions_RANSAC_Deepv2dscale[:, 1], 0.5)
-            # plt.scatter(positions_pred[:, 0], positions_pred[:, 1], 0.5)
-            # plt.scatter(positions_RANSAC[:, 0], positions_RANSAC[:, 1], 0.5)
-            # plt.scatter(positions_Deepv2d[:, 0], positions_Deepv2d[:, 1], 0.5)
-            # plt.axis('equal')
-            # plt.legend(['positions_odom', 'positions_RANSAC_Deepv2dscale', 'positions_pred', 'positions_RANSAC', 'positions_Deepv2d'])
-            # plt.savefig(os.path.join(vls_fold, '{}.png'.format(s)))
-            # plt.close()
