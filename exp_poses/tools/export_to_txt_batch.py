@@ -676,7 +676,7 @@ if __name__ == '__main__':
 
     all_preds = glob.glob(os.path.join(args.pridction_root, "*/"))
     all_preds.sort()
-    all_preds = all_preds[0:len(all_preds)-1]
+    # all_preds = all_preds[0:len(all_preds)-1]
     for pred in all_preds:
         print(pred)
         if '_txt' in pred:
