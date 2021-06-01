@@ -354,6 +354,7 @@ if __name__ == '__main__':
     best_pth_name = None
 
     folds_to_gen = glob.glob(os.path.join(args.RANSACPose_root, '*/'))
+    folds_to_gen.sort()
     export_root = args.export_root
     for fold_to_gen in folds_to_gen:
         args.RANSACPose_root = fold_to_gen
