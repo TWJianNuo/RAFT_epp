@@ -663,14 +663,20 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=int, default=6)
     parser.add_argument('--seqid', type=str, default=1)
     parser.add_argument('--isdeepv2d', action='store_true')
+    parser.add_argument('--seq_mark', type=str)
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    seqids = [0, 5]
+    if args.seq_mark == 'eigen':
+        seqids = [0, 5]
+    else:
+        seqids = [9, 10]
 
     all_preds = glob.glob(os.path.join(args.pridction_root, "*/"))
+    all_preds.sort()
+    all_preds = all_preds[0:len(all_preds)-1]
     for pred in all_preds:
         if '_txt' in pred:
             continue
