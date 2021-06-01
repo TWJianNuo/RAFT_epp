@@ -313,15 +313,15 @@ class KittiEvalOdom():
         xyz_gt = np.asarray(xyz_gt).transpose(1, 0)
         xyz_result = np.asarray(xyz_result).transpose(1, 0)
 
-        # r, t, scale = umeyama_alignment(xyz_result, xyz_gt, True)
-        #
-        # align_transformation = np.eye(4)
-        # align_transformation[:3:, :3] = r
-        # align_transformation[:3, 3] = t
-        #
-        # for cnt in poses_result:
-        #     poses_result[cnt][:3, 3] *= scale
-        #     poses_result[cnt] = align_transformation @ poses_result[cnt]
+        r, t, scale = umeyama_alignment(xyz_result, xyz_gt, True)
+
+        align_transformation = np.eye(4)
+        align_transformation[:3:, :3] = r
+        align_transformation[:3, 3] = t
+
+        for cnt in poses_result:
+            poses_result[cnt][:3, 3] *= scale
+            poses_result[cnt] = align_transformation @ poses_result[cnt]
 
         # ----------------------------------------------------------------------
         # compute sequence errors
