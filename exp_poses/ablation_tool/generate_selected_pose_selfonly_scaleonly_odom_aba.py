@@ -120,13 +120,6 @@ def validate_kitti(model, args, eval_loader):
     model.eval()
     gpu = args.gpu
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
-        export_folder = os.path.join(args.export_root, seq[0:10], seq + "_sync", 'image_02')
-        os.makedirs(export_folder, exist_ok=True)
-        export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
-
-        if os.path.exists(export_path):
-            continue
-
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
         intrinsic = data_blob['intrinsic'].cuda(gpu)
@@ -137,6 +130,14 @@ def validate_kitti(model, args, eval_loader):
         mvd_decps_pad = data_blob['mvd_decps_pad'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
         tag = data_blob['tag'][0]
+
+        export_folder = os.path.join(args.export_root, seq[0:10], seq + "_sync", 'image_02')
+        os.makedirs(export_folder, exist_ok=True)
+        export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
+
+        if os.path.exists(export_path):
+            continue
+
 
         posepred = posepred[:, :, 0]
         ang_decps_pad = ang_decps_pad[:, :, 0]

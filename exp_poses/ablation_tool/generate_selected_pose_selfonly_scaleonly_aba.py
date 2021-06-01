@@ -131,6 +131,12 @@ def validate_kitti(model, args, eval_loader):
         posepred = data_blob['posepred'].cuda(gpu)
         tag = data_blob['tag'][0]
 
+        export_folder = os.path.join(args.export_root, seq[0:10], seq + "_sync", 'image_02')
+        os.makedirs(export_folder, exist_ok=True)
+        export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
+        if os.path.exists(export_path):
+            continue
+
         posepred = posepred[:, :, 0]
         ang_decps_pad = ang_decps_pad[:, :, 0]
         scl_decps_pad = scl_decps_pad[:, :, 0]
@@ -151,9 +157,6 @@ def validate_kitti(model, args, eval_loader):
         pose_bs_np = RANSAC_pose @ np.linalg.inv(RANSAC_pose[0]) @ poseselected_np
         pose_bs_np[0] = poseselected_np
 
-        export_folder = os.path.join(args.export_root, seq[0:10], seq + "_sync", 'image_02')
-        os.makedirs(export_folder, exist_ok=True)
-        export_path = os.path.join(export_folder,  "{}.pickle".format(str(frmid).zfill(10)))
         with open(export_path, 'wb') as handle:
             pickle.dump(pose_bs_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
