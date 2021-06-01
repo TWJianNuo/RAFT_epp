@@ -691,6 +691,8 @@ if __name__ == '__main__':
     #             seqmap, oval_entries = generate_seqmapping()
     #             eval_generated_odom(args, seqmap, oval_entries, k)
 
-    k = 0
-    entries = read_splits(args, it=k)
-    mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+    for k in range(5):
+        entries = read_splits(args, it=k)
+        mp.spawn(train, nprocs=args.nprocs, args=(args, entries, k))
+        seqmap, oval_entries = generate_seqmapping()
+        eval_generated_odom(args, seqmap, oval_entries, k)
