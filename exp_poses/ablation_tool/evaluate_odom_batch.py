@@ -363,8 +363,8 @@ if __name__ == '__main__':
     pred_folds = glob(os.path.join(args.prediction_root, '*/'))
     pred_folds.sort()
     for seq in seqids:
-        ave_t_errs = list()
-        ave_r_errs = list()
+        t_errs = list()
+        r_errs = list()
         for pred_fold in pred_folds:
             if '_txt' not in pred_fold:
                 continue
@@ -374,11 +374,13 @@ if __name__ == '__main__':
             args.seq = seq
             args.gt_txt = os.path.join(project_rootdir, 'exp_poses/kittiodom_gt/poses/{}.txt'.format(str(seq).zfill(2)))
             args.result_txt = os.path.join(pred_fold, '{}.txt'.format(str(seq).zfill(2)))
-            ave_t_err, ave_r_err = eval_tool.eval(args.gt_txt, args.result_txt, seq=args.seq)
-            ave_t_errs.append(ave_t_err)
-            ave_r_errs.append(ave_r_err)
+            t_err, r_err = eval_tool.eval(args.gt_txt, args.result_txt, seq=args.seq)
+            t_errs.append(t_err * 100)
+            r_errs.append(r_err / np.pi * 180 * 100)
 
         print("=================Tot:{}==========================".format(pred_fold.split('/')[-2]))
-        ave_t_errs = np.mean(np.array(ave_t_errs))
-        ave_r_errs = np.mean(np.array(ave_r_errs))
-        print("Sequence:%s, No Align Translational error : %f , Rotational error (deg/100m): %f" % (str(seq).zfill(2), ave_t_errs * 100, ave_r_errs / np.pi * 180 * 100))
+        ave_t_errs = np.mean(np.array(t_errs))
+        var_t_errs = np.var(np.array(t_errs))
+        ave_r_errs = np.mean(np.array(r_errs))
+        var_r_errs = np.var(np.array(r_errs))
+        print("No Align, Sequence:%s, T_err : (%f, %f) , R_err: (%f, %f)" % (str(seq).zfill(2), ave_t_errs, var_t_errs, ave_r_errs, var_r_errs))
