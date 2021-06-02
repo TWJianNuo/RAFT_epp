@@ -22,7 +22,7 @@ import torch.nn.functional as F
 import time
 
 from torch.utils.data import DataLoader
-from exp_nyu_v2.dataset_nyu_fixation import NYUV2
+from exp_nyu_v2.dataset_nyu_fixation_variance import NYUV2
 from exp_nyu_v2.eppflowenet.EppFlowNet_scale_initialD_nyu import EppFlowNet
 
 from torch.utils.tensorboard import SummaryWriter
