@@ -88,7 +88,7 @@ def compute_errors(gt, pred):
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, group, ismean=False, posename=None):
+def validate_kitti(model, args, eval_loader, group, ismean=False):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
@@ -185,12 +185,12 @@ def train(gpu, ngpus_per_node, args):
                                    mdPred_root=args.mdPred_root, ins_root=args.ins_root, istrain=False, isgarg=True,
                                    RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
         eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-        eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True,
+        eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False,
                                       sampler=eval_sampler)
 
         print("Test splits contain %d images" % (eval_dataset.__len__()))
 
-        validate_kitti(model.module, args, eval_loader, group)
+        validate_kitti(model.module, args, eval_loader, group, ismean=True)
     else:
         pose_folds = glob.glob(os.path.join(args.RANSACPose_root, '*/'))
         pose_folds.sort()
@@ -205,11 +205,11 @@ def train(gpu, ngpus_per_node, args):
                                        depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, deepv2dpred_root=args.deepv2dpred_root,
                                        mdPred_root=args.mdPred_root, ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
             eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-            eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
+            eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
             print("Test splits contain %d images" % (eval_dataset.__len__()))
 
-            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, ismean=True, posename=pose_fold.split('/')[-2])
+            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, ismean=True)
             if args.gpu == 0:
                 eval_measures_depth_rec.append(eval_measures_depth)
 
@@ -239,7 +239,7 @@ def train(gpu, ngpus_per_node, args):
 
             print("Test splits contain %d images" % (eval_dataset.__len__()))
 
-            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, ismean=False, posename=pose_fold.split('/')[-2])
+            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, ismean=False)
             if args.gpu == 0:
                 eval_measures_depth_rec.append(eval_measures_depth)
 
