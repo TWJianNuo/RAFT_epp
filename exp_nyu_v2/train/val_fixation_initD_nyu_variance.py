@@ -239,7 +239,7 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False, i
     eval_measures_depth = torch.zeros(11).cuda(device=gpu)
     maskednum = 0
 
-    for val_id, data_blob in enumerate(tqdm(eval_loader)):
+    for val_id, data_blob in enumerate((eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
         intrinsic = data_blob['intrinsic'].cuda(gpu)
