@@ -546,7 +546,7 @@ def train(processid, args, entries, iters=0):
         stidx = int(interval * processid)
         edidx = int(interval * (processid + 1))
 
-    eval_dataset = NYUV2(root=args.dataset_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root, mdPred_root=args.mdPred_root, iter=np.random.randint(0, 4))
+    eval_dataset = NYUV2(root=args.dataset_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root, mdPred_root=args.mdPred_root, iter=0)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
     validate_RANSAC_odom_relpose(args, eval_loader, samplenum=args.samplenum, iters=iters)
     return
