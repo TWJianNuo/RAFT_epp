@@ -380,7 +380,7 @@ if __name__ == '__main__':
 
         print("=================Tot:{}==========================".format(pred_fold.split('/')[-2]))
         ave_t_errs = np.mean(np.array(t_errs))
-        var_t_errs = np.var(np.array(t_errs))
+        var_t_errs = np.std(np.array(t_errs))
         ave_r_errs = np.mean(np.array(r_errs))
-        var_r_errs = np.var(np.array(r_errs))
+        var_r_errs = np.std(np.array(r_errs))
         print("No Align, Sequence:%s, T_err : (%f, %f) , R_err: (%f, %f)" % (str(seq).zfill(2), ave_t_errs, var_t_errs, ave_r_errs, var_r_errs))
