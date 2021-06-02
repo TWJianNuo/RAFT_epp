@@ -381,17 +381,17 @@ def train(gpu, ngpus_per_node, args):
             eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True, ismean=True)
             if args.gpu == 0:
                 eval_measures_depth_rec.append(eval_measures_depth)
-            if args.gpu == 0:
-                eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
-                eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
-                eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
+        if args.gpu == 0:
+            eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
+            eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
+            eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
 
-                print("=============AVE Mean Scaling====================")
-                print("{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
-                for i in range(9):
-                    print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
-                print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
-                print("=================================================")
+            print("=============AVE Mean Scaling====================")
+            print("{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+            for i in range(9):
+                print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
+            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+            print("=================================================")
 
         eval_measures_depth_rec = list()
 
@@ -408,18 +408,18 @@ def train(gpu, ngpus_per_node, args):
             eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True, ismean=False)
             if args.gpu == 0:
                 eval_measures_depth_rec.append(eval_measures_depth)
-            if args.gpu == 0:
-                eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
-                eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
-                eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
+        if args.gpu == 0:
+            eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
+            eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
+            eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
 
-                print("=============AVE No Mean Scaling====================")
-                print(
-                    "{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
-                for i in range(9):
-                    print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
-                print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
-                print("=================================================")
+            print("=============AVE No Mean Scaling====================")
+            print(
+                "{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+            for i in range(9):
+                print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
+            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+            print("=================================================")
 
     return
 
