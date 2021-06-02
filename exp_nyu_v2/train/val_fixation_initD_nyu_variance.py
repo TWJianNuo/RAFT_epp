@@ -35,6 +35,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.autograd import Variable
 from tqdm import tqdm
+import glob
 
 # import torch.backends.cudnn as cudnn
 # cudnn.benchmark = True
@@ -230,7 +231,7 @@ def compute_errors(gt, pred):
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3, sc_inv]
 
 @torch.no_grad()
-def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
+def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False, ismean=True):
     """ Peform validation using the KITTI-2015 (train) split """
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
@@ -262,7 +263,7 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
-        if args.mean_scale:
+        if ismean:
             pred_depth_flatten = pred_depth_flatten / np.mean(pred_depth_flatten) * np.mean(depth_gt_flatten)
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
@@ -276,26 +277,12 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False):
     if args.gpu == 0:
         eval_measures_depth[0:10] = eval_measures_depth[0:10] / eval_measures_depth[10]
         eval_measures_depth = eval_measures_depth.cpu().numpy()
-        if not domask:
-            print('Computing Depth errors for %f eval samples' % (eval_measures_depth[10].item()))
-        else:
-            print('Computing Depth errors for %f eval samples, masked: %f' % (eval_measures_depth[10].item(), maskednum))
         print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
         for i in range(9):
             print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
         print('{:7.3f}'.format(eval_measures_depth[9]))
 
-        return {'silog': float(eval_measures_depth[0]),
-                'abs_rel': float(eval_measures_depth[1]),
-                'log10': float(eval_measures_depth[2]),
-                'rms': float(eval_measures_depth[3]),
-                'sq_rel': float(eval_measures_depth[4]),
-                'log_rms': float(eval_measures_depth[5]),
-                'd1': float(eval_measures_depth[6]),
-                'd2': float(eval_measures_depth[7]),
-                'd3': float(eval_measures_depth[8]),
-                'sc_inv': float(eval_measures_depth[9])
-                }
+        return eval_measures_depth[0:10]
     else:
         return None
 
@@ -364,29 +351,75 @@ def train(gpu, ngpus_per_node, args):
 
     train_entries, evaluation_entries = read_splits()
 
-    eval_dataset = NYUV2(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, mdPred_root=args.mdPred_root,
-                               RANSACPose_root=args.RANSACPose_root, flowpred_root=args.flowpred_root, istrain=False)
-    eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
-
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
-    if args.gpu == 0:
-        results = validate_kitti(model.module, args, eval_loader, group, isorg=False)
-    else:
-        results = validate_kitti(model.module, args, eval_loader, group, isorg=False)
+    if args.single_test:
+        eval_dataset = NYUV2(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, mdPred_root=args.mdPred_root,
+                                   RANSACPose_root=args.RANSACPose_root, flowpred_root=args.flowpred_root, istrain=False)
+        eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
+        eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
-    if args.gpu == 0:
-        validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True)
+        eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True, ismean=True)
     else:
-        validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True)
+        pose_folds = glob.glob(os.path.join(args.RANSACPose_root, '*/'))
+        pose_folds.sort()
 
-    if args.gpu == 0:
-        results = validate_kitti(model.module, args, eval_loader, group, isorg=True)
-    else:
-        validate_kitti(model.module, args, eval_loader, group, isorg=True)
+        eval_measures_depth_rec = list()
 
+        for pose_fold in pose_folds:
+            if '_txt' in pose_fold:
+                continue
+
+            args.RANSACPose_root = pose_fold
+
+            eval_dataset = NYUV2(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, mdPred_root=args.mdPred_root,
+                                       RANSACPose_root=args.RANSACPose_root, flowpred_root=args.flowpred_root, istrain=False)
+            eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
+            eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
+
+            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True, ismean=True)
+            if args.gpu == 0:
+                eval_measures_depth_rec.append(eval_measures_depth)
+            if args.gpu == 0:
+                eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
+                eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
+                eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
+
+                print("=============AVE Mean Scaling====================")
+                print("{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+                for i in range(9):
+                    print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
+                print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+                print("=================================================")
+
+        eval_measures_depth_rec = list()
+
+        for pose_fold in pose_folds:
+            if '_txt' in pose_fold:
+                continue
+
+            args.RANSACPose_root = pose_fold
+
+            eval_dataset = NYUV2(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, mdPred_root=args.mdPred_root, RANSACPose_root=args.RANSACPose_root, flowpred_root=args.flowpred_root, istrain=False)
+            eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
+            eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
+
+            eval_measures_depth = validate_kitti(model.module, args, eval_loader, group, isorg=False, domask=True, ismean=False)
+            if args.gpu == 0:
+                eval_measures_depth_rec.append(eval_measures_depth)
+            if args.gpu == 0:
+                eval_measures_depth_rec = np.stack(eval_measures_depth_rec, axis=1)
+                eval_measures_depth_mean = np.mean(eval_measures_depth_rec, axis=1)
+                eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
+
+                print("=============AVE No Mean Scaling====================")
+                print(
+                    "{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+                for i in range(9):
+                    print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
+                print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+                print("=================================================")
 
     return
 
@@ -413,6 +446,8 @@ if __name__ == '__main__':
     parser.add_argument('--maxlogscale', type=float, default=0.8)
     parser.add_argument('--num_deges', type=int, default=32)
     parser.add_argument('--ban_static_in_trianing', action='store_true')
+    parser.add_argument('--runningtimes', type=int, default=5)
+    parser.add_argument('--single_test', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
