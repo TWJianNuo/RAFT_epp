@@ -172,7 +172,6 @@ def train(gpu, ngpus_per_node, args):
         model.load_state_dict(checkpoint, strict=False)
 
     train_entries, evaluation_entries = read_splits()
-    evaluation_entries = evaluation_entries[0:30]
 
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
