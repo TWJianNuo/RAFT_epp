@@ -267,12 +267,6 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False, i
             deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
             Image.fromarray(predread_np).save(os.path.join(args.export_root, str(deepv2didx).zfill(5) + '.png'))
 
-            predread_np = mD_pred.squeeze().cpu().numpy()
-            predread_np = predread_np * 1000
-            predread_np = predread_np.astype(np.uint16)
-            deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
-            Image.fromarray(predread_np).save(os.path.join(args.export_root_init, str(deepv2didx).zfill(5) + '.png'))
-
             poseprednp = posepred.squeeze().cpu().numpy()
             with open(os.path.join(args.export_root, str(deepv2didx).zfill(5) + '.pickle'), 'wb') as handle:
                 pickle.dump(poseprednp, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -469,32 +463,48 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.dist_url = args.dist_url.rstrip('1235') + str(np.random.randint(2000, 3000, 1).item())
 
-    args.export_root_init = args.export_root + '_init'
-    os.makedirs(args.export_root, exist_ok=True)
-    os.makedirs(args.export_root_init, exist_ok=True)
-
     torch.manual_seed(1234)
     np.random.seed(1234)
 
     torch.cuda.empty_cache()
     ngpus_per_node = torch.cuda.device_count()
 
-    # evaluation_entries, bridge_entries, deepv2d_entries = read_splits()
-    # nyu_gt = np.load('/media/shengjie/disk1/data/nyutest/nyu_groundtruth.npy')
-    # nyu_org_root = '/media/shengjie/disk1/data/nyuv2_organized'
-    # nyu_deepv2d_root = '/media/shengjie/disk1/data/nyutest/nyu'
-    # export_root = '/media/shengjie/disk1/visualization/aligh_with_deepv2d_check'
-    # os.makedirs(export_root, exist_ok=True)
+    evaluation_entries, bridge_entries, deepv2d_entries = read_splits()
+    nyu_gt = np.load('/media/shengjie/disk1/data/nyutest/nyu_groundtruth.npy')
+    nyu_org_root = '/media/shengjie/disk1/data/nyuv2_organized'
+    nyu_deepv2d_root = '/media/shengjie/disk1/data/nyutest/nyu'
+    pred_root = '/media/shengjie/disk1/Prediction/ablation_depth_predictions'
+    export_root = '/media/shengjie/disk1/visualization/nyu_vls_cp'
+    os.makedirs(export_root, exist_ok=True)
 
-    # allidx_rec = list()
-    # for _, entry in (enumerate(tqdm(evaluation_entries))):
-    #     seq, frmidx = entry.split(' ')
-    #     deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
-    #     img1 = Image.open(os.path.join(nyu_org_root, seq, 'rgb_00000.png'))
-    #     img2 = Image.open(os.path.join(nyu_deepv2d_root, str(deepv2didx).zfill(3), '000.png'))
-    #     # imgcombined = ((np.array(img1).astype(np.float32) + np.array(img1).astype(np.float32)) / 2).astype(np.uint8)
-    #     imgcombined = np.concatenate([np.array(img1), np.array(img2)], axis=0)
-    #     Image.fromarray(imgcombined).save(os.path.join(export_root, "{}.png".format(str(deepv2didx).zfill(5))))
+    allidx_rec = list()
+    for _, entry in (enumerate(tqdm(evaluation_entries))):
+        seq, frmidx = entry.split(' ')
+        deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
+        img = Image.open(os.path.join(nyu_org_root, seq, 'rgb_00000.png'))
+
+        depth_deepv2d_eight = os.path.join(pred_root, 'deepv2d/nyuv2/eight_view/{}.png'.format(str(deepv2didx).zfill(5)))
+        depth_deepv2d_eight = Image.open(depth_deepv2d_eight)
+        depth_deepv2d_eight = np.array(depth_deepv2d_eight).astype(np.float32) / 1000
+        depth_deepv2d_eight = torch.from_numpy(depth_deepv2d_eight).unsqueeze(0).unsqueeze(0)
+
+        depth_deepv2d_two = os.path.join(pred_root, 'deepv2d/nyuv2/two_view/{}.png'.format(str(deepv2didx).zfill(5)))
+        depth_deepv2d_two = Image.open(depth_deepv2d_two)
+        depth_deepv2d_two = np.array(depth_deepv2d_two).astype(np.float32) / 1000
+        depth_deepv2d_two = torch.from_numpy(depth_deepv2d_two).unsqueeze(0).unsqueeze(0)
+
+        ours = os.path.join(pred_root, 'ours/nyuv2/{}.png'.format(str(deepv2didx).zfill(5)))
+        ours = Image.open(ours)
+        ours = np.array(ours).astype(np.float32) / 1000
+        ours = torch.from_numpy(ours).unsqueeze(0).unsqueeze(0)
+
+        tensor2disp(1 / depth_deepv2d_eight, vmax=0.7).show()
+        tensor2disp(1 / depth_deepv2d_two, vmax=0.7).show()
+        tensor2disp(1 / ours, vmax=0.7).show()
+
+
+        imgcombined = np.concatenate([np.array(img1), np.array(img2)], axis=0)
+        Image.fromarray(imgcombined).save(os.path.join(export_root, "{}.png".format(str(deepv2didx).zfill(5))))
 
     if args.distributed:
         args.world_size = ngpus_per_node
