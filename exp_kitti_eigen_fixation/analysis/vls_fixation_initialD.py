@@ -66,13 +66,15 @@ def compute_errors(gt, pred):
 def concat_imgs(figs):
     w, h = figs[0].size
     left = 0
-    top = h - 220
-    right = 520
+    # top = h - 220
+    # right = 520
+    top = h - 352
+    right = 1216
     bottom = h
     for k in range(len(figs)):
         figs[k] = figs[k].crop((left, top, right, bottom))
 
-    imgs = np.concatenate(figs, axis=1)
+    imgs = np.concatenate(figs, axis=0)
 
     return Image.fromarray(imgs)
 
