@@ -74,9 +74,7 @@ def concat_imgs(figs):
     for k in range(len(figs)):
         figs[k] = figs[k].crop((left, top, right, bottom))
 
-    imgs = np.concatenate(figs, axis=0)
-
-    return Image.fromarray(imgs)
+    return figs
 
 @torch.no_grad()
 def validate_kitti(model, args, eval_loader, group, isdeepv2d=False):
@@ -93,11 +91,11 @@ def validate_kitti(model, args, eval_loader, group, isdeepv2d=False):
     deepv2d_root = os.path.join(vlsroot, 'deepv2d_vls')
     rgb_root = os.path.join(vlsroot, 'rgb_in')
 
-    os.makedirs(residual_root, exist_ok=True)
-    os.makedirs(bts_root, exist_ok=True)
-    os.makedirs(ours_root, exist_ok=True)
-    os.makedirs(deepv2d_root, exist_ok=True)
-    os.makedirs(rgb_root, exist_ok=True)
+    # os.makedirs(residual_root, exist_ok=True)
+    # os.makedirs(bts_root, exist_ok=True)
+    # os.makedirs(ours_root, exist_ok=True)
+    # os.makedirs(deepv2d_root, exist_ok=True)
+    # os.makedirs(rgb_root, exist_ok=True)
 
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
@@ -128,12 +126,20 @@ def validate_kitti(model, args, eval_loader, group, isdeepv2d=False):
         # tensor2grad(sigmoidact, pos_bar=0.1, neg_bar=-0.1, viewind=0).save(os.path.join(residual_root, svname))
 
         fig1 = tensor2rgb(image1, viewind=0)
+        fig1_2 = tensor2rgb(image2, viewind=0)
         fig2 = tensor2disp(1 / depthpred_deepv2d, vmax=0.15, viewind=0)
         fig3 = tensor2disp(1 / mD_pred_clipped, vmax=0.15, viewind=0)
         fig4 = tensor2grad(sigmoidact, pos_bar=0.1, neg_bar=-0.1, viewind=0)
         fig5 = tensor2disp(1 / predread, vmax=0.15, viewind=0)
 
-        imgvls = concat_imgs([fig1, fig2, fig3, fig4, fig5])
+        figs = concat_imgs([fig1, fig1_2, fig2, fig3, fig4, fig5])
+
+        figc1 = np.concatenate([np.array(figs[0]), np.array(figs[1])], axis=0)
+        figc2 = np.concatenate([np.array(figs[4]), np.array(figs[2])], axis=0)
+        figc3 = np.concatenate([np.array(figs[3]), np.array(figs[5])], axis=0)
+        imgvls = np.concatenate([figc1, figc2, figc3], axis=1)
+        imgvls = Image.fromarray(imgvls)
+
         imgvls.save(os.path.join(vlsroot, svname))
 
         selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval)).float()

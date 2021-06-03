@@ -277,8 +277,8 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False, i
     if args.gpu == 0:
         eval_measures_depth[0:10] = eval_measures_depth[0:10] / eval_measures_depth[10]
         eval_measures_depth = eval_measures_depth.cpu().numpy()
-        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
-        for i in range(9):
+        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+        for i in range(10):
             print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
         print('{:7.3f}'.format(eval_measures_depth[9]))
 
@@ -387,10 +387,10 @@ def train(gpu, ngpus_per_node, args):
             eval_measures_depth_std = np.std(eval_measures_depth_rec, axis=1)
 
             print("=============AVE Mean Scaling====================")
-            print("{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
-            for i in range(9):
+            print("{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+            for i in range(10):
                 print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
-            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[9], eval_measures_depth_std[i]))
             print("=================================================")
 
         eval_measures_depth_rec = list()
@@ -415,10 +415,10 @@ def train(gpu, ngpus_per_node, args):
 
             print("=============AVE No Mean Scaling====================")
             print(
-                "{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
-            for i in range(9):
+                "{:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}, {:>18}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3', 'sc_inv'))
+            for i in range(10):
                 print('({:7.3f}, {:7.3f}), '.format(eval_measures_depth_mean[i], eval_measures_depth_std[i]), end='')
-            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[8], eval_measures_depth_std[i]))
+            print('({:7.3f}, {:7.3f})'.format(eval_measures_depth_mean[9], eval_measures_depth_std[i]))
             print("=================================================")
 
     return

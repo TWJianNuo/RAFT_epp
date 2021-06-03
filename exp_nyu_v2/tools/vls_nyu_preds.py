@@ -420,6 +420,13 @@ def train(gpu, ngpus_per_node, args):
 
     return
 
+def crop_img(img, left, top, crph, crpw):
+    img = np.array(img)
+    if len(img.shape) == 3:
+        img_cropped = img[top:top+crph, left:left+crpw, :]
+    else:
+        img_cropped = img[top:top + crph, left:left + crpw]
+    return Image.fromarray(img_cropped)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -478,18 +485,24 @@ if __name__ == '__main__':
     os.makedirs(export_root, exist_ok=True)
 
     allidx_rec = list()
+    crph = 448
+    crpw = 640
+
+    top = int((480 - crph) / 2)
+    left = int((640 - crpw) / 2)
     for _, entry in (enumerate(tqdm(evaluation_entries))):
         seq, frmidx = entry.split(' ')
         deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
-        img = Image.open(os.path.join(nyu_org_root, seq, 'rgb_00000.png'))
+        img = crop_img(Image.open(os.path.join(nyu_org_root, seq, 'rgb_00000.png')), left, top, crph, crpw)
+        img2 = crop_img(Image.open(os.path.join(nyu_org_root, seq, 'rgb_00001.png')), left, top, crph, crpw)
 
         depth_deepv2d_eight = os.path.join(pred_root, 'deepv2d/nyuv2/eight_view/{}.png'.format(str(deepv2didx).zfill(5)))
-        depth_deepv2d_eight = Image.open(depth_deepv2d_eight)
+        depth_deepv2d_eight = crop_img(Image.open(depth_deepv2d_eight), left, top, crph, crpw)
         depth_deepv2d_eight = np.array(depth_deepv2d_eight).astype(np.float32) / 1000
         depth_deepv2d_eight = torch.from_numpy(depth_deepv2d_eight).unsqueeze(0).unsqueeze(0)
 
         depth_deepv2d_two = os.path.join(pred_root, 'deepv2d/nyuv2/two_view/{}.png'.format(str(deepv2didx).zfill(5)))
-        depth_deepv2d_two = Image.open(depth_deepv2d_two)
+        depth_deepv2d_two = crop_img(Image.open(depth_deepv2d_two), left, top, crph, crpw)
         depth_deepv2d_two = np.array(depth_deepv2d_two).astype(np.float32) / 1000
         depth_deepv2d_two = torch.from_numpy(depth_deepv2d_two).unsqueeze(0).unsqueeze(0)
 
@@ -498,16 +511,25 @@ if __name__ == '__main__':
         ours = np.array(ours).astype(np.float32) / 1000
         ours = torch.from_numpy(ours).unsqueeze(0).unsqueeze(0)
 
-        tensor2disp(1 / depth_deepv2d_eight, vmax=0.7).show()
-        tensor2disp(1 / depth_deepv2d_two, vmax=0.7).show()
-        tensor2disp(1 / ours, vmax=0.7).show()
+        ours_init = os.path.join(pred_root, 'ours/nyuv2_init/{}.png'.format(str(deepv2didx).zfill(5)))
+        ours_init = Image.open(ours_init)
+        ours_init = np.array(ours_init).astype(np.float32) / 1000
+        ours_init = torch.from_numpy(ours_init).unsqueeze(0).unsqueeze(0)
 
+        depth_deepv2d_eight = tensor2disp(1 / depth_deepv2d_eight, vmax=0.7)
+        depth_deepv2d_two = tensor2disp(1 / depth_deepv2d_two, vmax=0.7)
+        ours = tensor2disp(1 / ours, vmax=0.7)
+        ours_init = tensor2disp(1 / ours_init, vmax=0.7)
 
-        imgcombined = np.concatenate([np.array(img1), np.array(img2)], axis=0)
+        fig1 = np.concatenate([np.array(img), np.array(img2)], axis=0)
+        fig2 = np.concatenate([np.array(depth_deepv2d_two), np.array(depth_deepv2d_eight)], axis=0)
+        fig3 = np.concatenate([np.array(ours_init), np.array(ours)], axis=0)
+
+        imgcombined = np.concatenate([np.array(fig1), np.array(fig2), np.array(fig3)], axis=1)
         Image.fromarray(imgcombined).save(os.path.join(export_root, "{}.png".format(str(deepv2didx).zfill(5))))
 
-    if args.distributed:
-        args.world_size = ngpus_per_node
-        mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
-    else:
-        train(args.gpu, ngpus_per_node, args)
+    # if args.distributed:
+    #     args.world_size = ngpus_per_node
+    #     mp.spawn(train, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+    # else:
+    #     train(args.gpu, ngpus_per_node, args)
