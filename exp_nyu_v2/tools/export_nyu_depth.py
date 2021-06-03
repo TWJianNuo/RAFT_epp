@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import time
+import pickle
 
 from torch.utils.data import DataLoader
 from exp_nyu_v2.dataset_nyu_fixation import NYUV2
@@ -265,6 +266,10 @@ def validate_kitti(model, args, eval_loader, group, isorg=False, domask=False, i
             predread_np = predread_np.astype(np.uint16)
             deepv2didx = find_idx_name(entry, bridge_entries, deepv2d_entries)
             Image.fromarray(predread_np).save(os.path.join(args.export_root, str(deepv2didx).zfill(5) + '.png'))
+
+            poseprednp = posepred.squeeze().cpu().numpy()
+            with open(os.path.join(args.export_root, str(deepv2didx).zfill(5) + '.pickle'), 'wb') as handle:
+                pickle.dump(poseprednp, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         selector = ((depthgt > 0) * (predread > 0) * (mD_pred > 0)).float()
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
