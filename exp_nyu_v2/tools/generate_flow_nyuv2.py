@@ -26,7 +26,8 @@ def read_splits():
     split_root = os.path.join(project_rootdir, 'exp_nyu_v2/splits')
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_test_files.txt'), 'r')]
-    return train_entries + evaluation_entries
+    # return train_entries + evaluation_entries
+    return evaluation_entries
 
 def remove_dup(entries):
     removed = list(set(entries))

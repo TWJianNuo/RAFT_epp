@@ -136,10 +136,27 @@ def validate_poses_gpssplit(args, eval_loader, group):
         posegt = data_blob['rel_pose'].cuda(gpu)
         if torch.sum(posegt) == 4:
             continue
-
+        tag = data_blob['tag'][0]
         intrinsic = data_blob['intrinsic'].cuda(gpu)
         insmap = data_blob['insmap'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
+
+        depthgt2 = Image.open("/media/shengjie/disk1/data/kitti_stereo15_organized/depth/{}/image_02/0000000010.png".format(tag.split(' ')[0]))
+        w, h = depthgt2.size
+        crph = 320
+        crpw = 1216
+        left = int((w - crpw) / 2)
+        top = int(h - crph)
+        depthgt2 = eval_loader.dataset.crop_img(np.array(depthgt2), left=left, top=top, crph=crph, crpw=crpw)
+        depthgt2 = np.array(depthgt2).astype(np.float32) / 256.0
+        depthgt2 = torch.from_numpy(depthgt2).unsqueeze(0).unsqueeze(0).float().cuda()
+
+        commonareaa = (depthgt > 0) * (depthgt2 > 0)
+        commonareaa = commonareaa.float()
+        depthgt = depthgt * commonareaa
+        depthgt2 = depthgt2 * commonareaa
+
+        # depthgt = depthgt2
         flowgt_stereo = data_blob['flowgt_stereo'].cuda(gpu)
         valid_flow = data_blob['valid_flow'].cuda(gpu) == 1
 
@@ -233,7 +250,7 @@ def train(gpu, ngpus_per_node, args):
     if args.distributed:
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
-    validate_poses_fullsplit(args, eval_loader, group)
+    # validate_poses_fullsplit(args, eval_loader, group)
     validate_poses_gpssplit(args, eval_loader, group)
     return
 

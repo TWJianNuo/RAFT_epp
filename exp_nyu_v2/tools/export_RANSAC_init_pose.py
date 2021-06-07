@@ -471,52 +471,50 @@ def validate_RANSAC_odom_relpose(args, eval_loader, samplenum=50000, iters=0):
         with open(export_root, 'wb') as handle:
             pickle.dump(self_pose, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        # if bestid >= 0:
-        #     optimized += 1
-        # elif bestid == -1:
-        #     skipped += 1
-        # else:
-        #     unresolved += 1
-        #
+
         # if bestid == -1:
-        #     flow_numpy = flowpred[0].cpu().permute([1, 2, 0]).numpy()
-        #     _, _, h, w = mdDepth_pred.shape
-        #     xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
-        #     xxf = xx.flatten()
-        #     yyf = yy.flatten()
-        #     rndidx = np.random.randint(0, xxf.shape[0], 100)
-        #     xxf_rnd = xxf[rndidx]
-        #     yyf_rnd = yyf[rndidx]
-        #
-        #     selector = mdDepth_pred.squeeze().cpu().numpy()[yyf_rnd, xxf_rnd] > 0
-        #     xxf_rnd = xxf_rnd[selector]
-        #     yyf_rnd = yyf_rnd[selector]
-        #
-        #     flowx = flow_numpy[yyf_rnd, xxf_rnd, 0]
-        #     flowy = flow_numpy[yyf_rnd, xxf_rnd, 1]
-        #     depthf = mdDepth_pred.squeeze().cpu().numpy()[yyf_rnd, xxf_rnd]
-        #
-        #     intrinsic_np = intrinsic.squeeze().numpy()
-        #     pts3d = np.stack([xxf_rnd * depthf, yyf_rnd * depthf, np.ones_like(yyf_rnd) * depthf, np.ones_like(yyf_rnd)], axis=0)
-        #     pts3d = intrinsic_np @ self_pose @ np.linalg.inv(intrinsic_np) @ pts3d
-        #     pts3d[0, :] = pts3d[0, :] / pts3d[2, :]
-        #     pts3d[1, :] = pts3d[1, :] / pts3d[2, :]
-        #
-        #     image1 = data_blob['img1']
-        #     image2 = data_blob['img2']
-        #     vlsrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
-        #     vlsrgb2 = tensor2rgb(image2 / 255.0, viewind=0)
-        #
-        #     fig = plt.figure(figsize=(12, 9))
-        #     plt.subplot(2, 1, 1)
-        #     plt.scatter(xxf_rnd, yyf_rnd, 1, 'r')
-        #     plt.imshow(vlsrgb1)
-        #     plt.subplot(2, 1, 2)
-        #     plt.scatter(flowx + xxf_rnd, flowy + yyf_rnd, 1, 'r')
-        #     plt.scatter(pts3d[0, :], pts3d[1, :], 1, 'b')
-        #     plt.imshow(vlsrgb2)
-        #     plt.savefig(os.path.join("/media/shengjie/disk1/visualization/nyu_pose_vls", "{}_{}.jpg".format(seq, str(frmidx).zfill(5))))
-        #     plt.close()
+        flow_numpy = flowpred[0].cpu().permute([1, 2, 0]).numpy()
+        _, _, h, w = mdDepth_pred.shape
+        xx, yy = np.meshgrid(range(w), range(h), indexing='xy')
+        xxf = xx.flatten()
+        yyf = yy.flatten()
+        rndidx = np.random.randint(0, xxf.shape[0], 100)
+        xxf_rnd = xxf[rndidx]
+        yyf_rnd = yyf[rndidx]
+
+        selector = mdDepth_pred.squeeze().cpu().numpy()[yyf_rnd, xxf_rnd] > 0
+        xxf_rnd = xxf_rnd[selector]
+        yyf_rnd = yyf_rnd[selector]
+
+        flowx = flow_numpy[yyf_rnd, xxf_rnd, 0]
+        flowy = flow_numpy[yyf_rnd, xxf_rnd, 1]
+        depthf = mdDepth_pred.squeeze().cpu().numpy()[yyf_rnd, xxf_rnd]
+
+        intrinsic_np = intrinsic.squeeze().numpy()
+        pts3d = np.stack([xxf_rnd * depthf, yyf_rnd * depthf, np.ones_like(yyf_rnd) * depthf, np.ones_like(yyf_rnd)], axis=0)
+        pts3d = intrinsic_np @ self_pose @ np.linalg.inv(intrinsic_np) @ pts3d
+        pts3d[0, :] = pts3d[0, :] / pts3d[2, :]
+        pts3d[1, :] = pts3d[1, :] / pts3d[2, :]
+
+        image1 = data_blob['img1']
+        image2 = data_blob['img2']
+        vlsrgb1 = tensor2rgb(image1 / 255.0, viewind=0)
+        vlsrgb2 = tensor2rgb(image2 / 255.0, viewind=0)
+
+        fig = plt.figure(figsize=(12, 9))
+        plt.subplot(2, 1, 1)
+        plt.scatter(xxf_rnd, yyf_rnd, 5, 'g')
+        plt.imshow(vlsrgb1)
+        plt.axis('off')
+        plt.subplot(2, 1, 2)
+        plt.scatter(flowx + xxf_rnd, flowy + yyf_rnd, 5, 'r')
+        plt.scatter(pts3d[0, :], pts3d[1, :], 5, 'b')
+        plt.axis('off')
+        # plt.legend(['RAFT Flow', 'Initial Depth + Intial Pose'])
+        plt.imshow(vlsrgb2)
+        # plt.show()
+        plt.savefig(os.path.join("/media/shengjie/disk1/visualization/nyu_pose_vls", "{}_{}.jpg".format(seq, str(frmidx).zfill(5))), bbox_inches='tight', pad_inches=0,)
+        plt.close()
 
     # print("Optimized: %f, unresolved: %f, skipped: %f" % (optimized / (optimized +skipped + unresolved), unresolved / (optimized +skipped + unresolved), skipped / (optimized +skipped + unresolved)))
     # bestids = np.array(bestids)
@@ -536,10 +534,11 @@ def read_splits(iters):
     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_train_files.txt'), 'r')]
     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'nyudepthv2_organized_test_files.txt'), 'r')]
 
-    if iters == 0:
-        return train_entries + evaluation_entries
-    else:
-        return train_entries
+    # if iters == 0:
+    #     return train_entries + evaluation_entries
+    # else:
+    #     return train_entries
+    return evaluation_entries
 
 def train(processid, args, entries, iters=0):
     interval = np.floor(len(entries) / args.nprocs).astype(np.int).item()

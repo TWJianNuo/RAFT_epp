@@ -85,7 +85,7 @@ def get_intrinsic_extrinsic(cam2cam, velo2cam, imu2cam):
     return intrinsic.astype(np.float32), extrinsic.astype(np.float32)
 
 class KITTI_eigen(data.Dataset):
-    def __init__(self, entries, root='datasets/KITTI', odom_root=None, ins_root=None, flowPred_root=None, mdPred_root=None, bsposepred_root=None):
+    def __init__(self, entries, root='datasets/KITTI', odom_root=None, ins_root=None, flowPred_root=None, mdPred_root=None, bsposepred_root=None, banins=False):
         super(KITTI_eigen, self).__init__()
         self.root = root
         self.odom_root = odom_root
@@ -93,6 +93,7 @@ class KITTI_eigen(data.Dataset):
         self.mdPred_root = mdPred_root
         self.ins_root = ins_root
         self.bsposepred_root = bsposepred_root
+        self.banins = banins
 
         self.image_list = list()
         self.intrinsic_list = list()
@@ -173,6 +174,9 @@ class KITTI_eigen(data.Dataset):
         intrinsic = copy.deepcopy(self.intrinsic_list[index])
         if self.ins_root is not None:
             inspred = np.array(Image.open(self.inspred_list[index])).astype(np.int)
+            if self.banins:
+                inspred = inspred * 0
+                inspred = inspred.astype(np.int)
         else:
             inspred = None
 
@@ -509,15 +513,15 @@ def generate_seqmapping():
 
     return seqmap, entries
 
-def read_splits(args, it):
-    split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
-    train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
-    evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
-    odom_entries = get_odomentries(args)
-    if it > 0:
-        return train_entries
-    else:
-        return train_entries + evaluation_entries + odom_entries
+# def read_splits(args, it):
+#     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
+#     train_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'train_files.txt'), 'r')]
+#     evaluation_entries = [x.rstrip('\n') for x in open(os.path.join(split_root, 'test_files.txt'), 'r')]
+#     odom_entries = get_odomentries(args)
+#     if it > 0:
+#         return train_entries
+#     else:
+#         return train_entries + evaluation_entries + odom_entries
 
 def read_splits(args, it):
     split_root = os.path.join(project_rootdir, 'exp_pose_mdepth_kitti_eigen/splits')
@@ -573,7 +577,7 @@ def train(processid, args, entries, iters=0):
         edidx = int(interval * (processid + 1))
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root,
-                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root)
+                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root, banins=args.banins)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
     validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum, iters=iters)
     return
@@ -668,6 +672,7 @@ if __name__ == '__main__':
     parser.add_argument('--edid', type=int, default=1)
     parser.add_argument('--evalonly', action='store_true')
     parser.add_argument('--skipexist', action='store_true')
+    parser.add_argument('--banins', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)

@@ -10,9 +10,7 @@ import cv2
 import time
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import torch
 import torch.nn as nn
@@ -94,6 +92,10 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
     model.eval()
     gpu = args.gpu
     eval_measures_depth = torch.zeros(10).cuda(device=gpu)
+    err_rec = list()
+    err_rec_deepv2d = list()
+    err_rec_md = list()
+    mv_rec = list()
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
@@ -101,6 +103,9 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         insmap = data_blob['insmap'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
+
+        rel_pose = data_blob['rel_pose'][0].cpu().numpy()
+        gps_scale = np.sqrt(np.sum(rel_pose[0:3, 3] ** 2))
 
         if not args.initbymD:
             mD_pred = data_blob['depthpred'].cuda(gpu)
@@ -121,38 +126,92 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
-
-        pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
+        deepv2d_depth_flatten = data_blob['depthpred_deepv2d'][selector == 1].cpu().numpy()
+        mD_pred_clipped_flatten = mD_pred[selector == 1].cpu().numpy()
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
+        eval_measures_depth_deepv2d_np = compute_errors(gt=depth_gt_flatten, pred=deepv2d_depth_flatten)
+        eval_measures_depth_md_np = compute_errors(gt=depth_gt_flatten, pred=mD_pred_clipped_flatten)
 
-        eval_measures_depth[:9] += torch.tensor(eval_measures_depth_np).cuda(device=gpu)
-        eval_measures_depth[9] += 1
+        err_rec.append(eval_measures_depth_np[-3])
+        mv_rec.append(gps_scale)
+        err_rec_deepv2d.append(eval_measures_depth_deepv2d_np[-3])
+        err_rec_md.append(eval_measures_depth_md_np[-3])
 
-    if args.distributed:
-        dist.all_reduce(tensor=eval_measures_depth, op=dist.ReduceOp.SUM, group=group)
+    err_rec = np.array(err_rec)
+    mv_rec = np.array(mv_rec)
+    err_rec_deepv2d = np.array(err_rec_deepv2d)
+    err_rec_md = np.array(err_rec_md)
 
-    if args.gpu == 0:
-        eval_measures_depth[0:9] = eval_measures_depth[0:9] / eval_measures_depth[9]
-        eval_measures_depth = eval_measures_depth.cpu().numpy()
-        print('Computing Depth errors for %f eval samples' % (eval_measures_depth[9].item()))
-        print("{:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}, {:>7}".format('silog', 'abs_rel', 'log10', 'rms', 'sq_rel', 'log_rms', 'd1', 'd2', 'd3'))
-        for i in range(8):
-            print('{:7.3f}, '.format(eval_measures_depth[i]), end='')
-        print('{:7.3f}'.format(eval_measures_depth[8]))
+    check_dist = np.linspace(0, 3, 200)
+    dist = 0.4
 
-        return {'silog': float(eval_measures_depth[0]),
-                'abs_rel': float(eval_measures_depth[1]),
-                'log10': float(eval_measures_depth[2]),
-                'rms': float(eval_measures_depth[3]),
-                'sq_rel': float(eval_measures_depth[4]),
-                'log_rms': float(eval_measures_depth[5]),
-                'd1': float(eval_measures_depth[6]),
-                'd2': float(eval_measures_depth[7]),
-                'd3': float(eval_measures_depth[8])
-                }
-    else:
-        return None
+    plot_mv = list()
+    plot_err = list()
+    plot_std = list()
+    for d in check_dist:
+        d_low = d * (1 - dist)
+        d_hig = d * (1 + dist)
+
+        selector = (mv_rec >= d_low) * (mv_rec <= d_hig)
+        if np.sum(selector) < 5:
+            continue
+        else:
+            err1 = np.mean(err_rec[selector])
+            err2 = np.mean(err_rec_deepv2d[selector])
+            err3 = np.mean(err_rec_md[selector])
+
+            std1 = np.std(err_rec[selector])
+            std2 = np.std(err_rec_deepv2d[selector])
+            std3 = np.std(err_rec_md[selector])
+            plot_err.append(np.array([err1, err2, err3]))
+            plot_std.append(np.array([std1, std2, std3]))
+            plot_mv.append(d)
+
+    plot_err = np.stack(plot_err, axis=0)
+    plot_mv = np.array(plot_mv)
+    plot_std = np.stack(plot_std, axis=0)
+
+    thickness = 0.1
+
+    fig, ax = plt.subplots()
+    plt.plot(plot_mv, plot_err[:, 0])
+    plt.plot(plot_mv, plot_err[:, 1])
+    plt.plot(plot_mv, plot_err[:, 2])
+    ax.fill_between(plot_mv, plot_err[:, 0] - plot_std[:, 0] * thickness, plot_err[:, 0] + plot_std[:, 0] * thickness, alpha=0.5)
+    ax.fill_between(plot_mv, plot_err[:, 1] - plot_std[:, 1] * thickness, plot_err[:, 1] + plot_std[:, 1] * thickness, alpha=0.5)
+    ax.fill_between(plot_mv, plot_err[:, 2] - plot_std[:, 2] * thickness, plot_err[:, 2] + plot_std[:, 2] * thickness, alpha=0.5)
+    plt.xlabel('scale in meters')
+    plt.ylabel('a1')
+    plt.legend(['ours', 'DeepV2D', 'Bts'], bbox_to_anchor=(0.1, 0.3))
+    plt.title("Error curve in KITTI")
+    plt.savefig('/home/shengjie/Desktop/1.png', bbox_inches='tight', pad_inches=0, dpi=150)
+    plt.close()
+    plt.show()
+
+
+
+
+
+
+    ave_err_rec = np.zeros((bins.shape[0], 3))
+    ave_err_rec_count = np.zeros((bins.shape[0], 1))
+    for idx, indice in enumerate(indices):
+        ave_err_rec[indice, 0] += err_rec[idx]
+        ave_err_rec[indice, 1] += err_rec_deepv2d[idx]
+        ave_err_rec[indice, 2] += err_rec_md[idx]
+        ave_err_rec_count[indice, 0] += 1
+    ave_err_rec = ave_err_rec / (ave_err_rec_count + 1e-6)
+    plt.figure()
+    plt.plot(bins, ave_err_rec[:, 0])
+    plt.plot(bins, ave_err_rec[:, 1])
+    plt.show()
+
+    plt.figure()
+    plt.scatter(mv_rec, err_rec)
+    plt.scatter(mv_rec, err_rec_deepv2d)
+    plt.show()
+
 
 MAX_FLOW = 400
 
@@ -203,7 +262,6 @@ def train(gpu, ngpus_per_node, args):
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
     validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
-    # validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
     return
 
 
