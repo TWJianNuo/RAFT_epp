@@ -579,7 +579,7 @@ def train(processid, args, entries, iters=0):
     eval_dataset = KITTI_eigen(root=args.dataset_root, odom_root=args.odom_root, entries=entries[stidx : edidx],  flowPred_root=args.flowPred_root,
                                mdPred_root=args.mdPred_root, ins_root=args.ins_root, bsposepred_root=args.bsposepred_root, banins=args.banins)
     eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=False, num_workers=args.num_workers, drop_last=False, shuffle=False)
-    validate_RANSAC_odom_relpose(args, eval_loader, banins=args.banins, bangrad=args.bangrad, samplenum=args.samplenum, iters=iters)
+    validate_RANSAC_odom_relpose(args, eval_loader, banins=False, bangrad=args.bangrad, samplenum=args.samplenum, iters=iters)
     return
 
 def eval_generated_odom(args, seqmap, entries, repeats=64):
