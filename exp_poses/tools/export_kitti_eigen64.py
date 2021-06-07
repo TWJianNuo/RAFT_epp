@@ -672,7 +672,6 @@ if __name__ == '__main__':
     parser.add_argument('--edid', type=int, default=1)
     parser.add_argument('--evalonly', action='store_true')
     parser.add_argument('--skipexist', action='store_true')
-    parser.add_argument('--banins', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
