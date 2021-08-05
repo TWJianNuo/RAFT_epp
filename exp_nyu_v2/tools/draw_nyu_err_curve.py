@@ -570,15 +570,22 @@ if __name__ == '__main__':
 
     check_dist = np.linspace(0, 0.18, 200)
     dist = 0.5
+    dist_ratio = 0.1
 
     plot_mv = list()
     plot_err = list()
     plot_std = list()
+    plot_num = list()
     for d in check_dist:
         d_low = d * (1 - dist)
         d_hig = d * (1 + dist)
 
         selector = (mv_rec >= d_low) * (mv_rec <= d_hig)
+
+        d_low = d * (1 - dist_ratio)
+        d_hig = d * (1 + dist_ratio)
+
+        selector_ratio = (mv_rec >= d_low) * (mv_rec <= d_hig)
         if np.sum(selector) < 5:
             continue
         else:
@@ -594,10 +601,13 @@ if __name__ == '__main__':
             plot_err.append(np.array([err1, err2, err3, err4]))
             plot_std.append(np.array([std1, std2, std3, std4]))
             plot_mv.append(d)
+            plot_num.append(np.sum(selector_ratio))
 
     plot_err = np.stack(plot_err, axis=0)
     plot_mv = np.array(plot_mv)
     plot_std = np.stack(plot_std, axis=0)
+    plot_num = np.stack(plot_num, axis=0)
+    plot_num = plot_num / np.sum(plot_num)
 
     thickness = 0.025
 
@@ -613,6 +623,10 @@ if __name__ == '__main__':
     plt.xlabel('scale')
     plt.ylabel('a1')
     plt.legend(['ours', 'DeepV2D Eight View', 'Adabins', 'DeepV2D Two View'], bbox_to_anchor=(0.1, 0.3))
+
+    ax2 = ax.twinx()
+    ax2.plot(plot_mv, plot_num, c='purple')
+    plt.legend(['Frame per Scale Percentage'],  loc='lower right')
     plt.savefig('/home/shengjie/Desktop/2.png', bbox_inches='tight', pad_inches=0, dpi=150)
     plt.close()
     plt.show()
