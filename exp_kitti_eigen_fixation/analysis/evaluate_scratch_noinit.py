@@ -110,7 +110,7 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
         if not isdeepv2d:
-            outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
+            outputs = model(image1, image2, intrinsic, posepred, insmap)
             predread = outputs[('depth', 2)]
         else:
             depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
