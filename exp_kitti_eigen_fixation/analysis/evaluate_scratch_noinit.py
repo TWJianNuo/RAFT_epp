@@ -39,6 +39,28 @@ from tqdm import tqdm
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def scale_invariant(gt, pr):
+    """
+    Computes the scale invariant loss based on differences of logs of depth maps.
+    Takes preprocessed depths (no nans, infs and non-positive values)
+    depth1:  one depth map
+    depth2:  another depth map
+    Returns:
+        scale_invariant_distance
+    """
+    gt = gt.reshape(-1)
+    pr = pr.reshape(-1)
+
+    v = gt > 0.1
+    gt = gt[v]
+    pr = pr[v]
+
+    log_diff = np.log(gt) - np.log(pr)
+    num_pixels = np.float32(log_diff.size)
+
+    # sqrt(Eq. 3)
+    return np.sqrt(np.sum(np.square(log_diff)) / num_pixels - np.square(np.sum(log_diff)) / np.square(num_pixels))
+
 def compute_errors(gt, pred):
     thresh = np.maximum((gt / pred), (pred / gt))
 
@@ -61,6 +83,8 @@ def compute_errors(gt, pred):
     err = np.abs(np.log10(pred) - np.log10(gt))
     log10 = np.mean(err)
 
+    sc_inv = scale_invariant(gt, pred)
+
     return [silog, abs_rel, log10, rms, sq_rel, log_rms, d1, d2, d3]
 
 @torch.no_grad()
@@ -70,7 +94,6 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
     model.eval()
     gpu = args.gpu
     eval_measures_depth = torch.zeros(10).cuda(device=gpu)
-
     for val_id, data_blob in enumerate(tqdm(eval_loader)):
         image1 = data_blob['img1'].cuda(gpu) / 255.0
         image2 = data_blob['img2'].cuda(gpu) / 255.0
@@ -78,19 +101,28 @@ def validate_kitti(model, args, eval_loader, logger, group, total_steps, isdeepv
         insmap = data_blob['insmap'].cuda(gpu)
         posepred = data_blob['posepred'].cuda(gpu)
         depthgt = data_blob['depthmap'].cuda(gpu)
-        depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
+
+        if not args.initbymD:
+            mD_pred = data_blob['depthpred'].cuda(gpu)
+        else:
+            mD_pred = data_blob['mdDepth_pred'].cuda(gpu)
+
+        mD_pred_clipped = torch.clamp_min(mD_pred, min=args.min_depth_pred)
 
         if not isdeepv2d:
-            outputs = model(image1, image2, intrinsic, posepred, insmap)
+            outputs = model(image1, image2, mD_pred_clipped, intrinsic, posepred, insmap)
             predread = outputs[('depth', 2)]
         else:
+            depthpred_deepv2d = data_blob['depthpred_deepv2d'].cuda(gpu)
             predread = depthpred_deepv2d
-        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval) * depthpred_deepv2d > 0).float()
+            # predread = data_blob['mdDepth_pred'].cuda(gpu)
+
+        selector = ((depthgt > 0) * (predread > 0) * (depthgt > args.min_depth_eval) * (depthgt < args.max_depth_eval)).float()
         predread = torch.clamp(predread, min=args.min_depth_eval, max=args.max_depth_eval)
         depth_gt_flatten = depthgt[selector == 1].cpu().numpy()
         pred_depth_flatten = predread[selector == 1].cpu().numpy()
 
-        pred_depth_flatten = np.median(depth_gt_flatten/pred_depth_flatten) * pred_depth_flatten
+        pred_depth_flatten = np.median(depth_gt_flatten / pred_depth_flatten) * pred_depth_flatten
 
         eval_measures_depth_np = compute_errors(gt=depth_gt_flatten, pred=pred_depth_flatten)
 
@@ -161,9 +193,9 @@ def train(gpu, ngpus_per_node, args):
 
     eval_dataset = KITTI_eigen(root=args.dataset_root, inheight=args.evalheight, inwidth=args.evalwidth, entries=evaluation_entries, maxinsnum=args.maxinsnum,
                                depth_root=args.depth_root, depthvls_root=args.depthvlsgt_root, prediction_root=args.prediction_root, deepv2dpred_root=args.deepv2dpred_root,
-                               ins_root=args.ins_root, istrain=False, isgarg=True)
+                               mdPred_root=args.mdPred_root, ins_root=args.ins_root, istrain=False, isgarg=True, RANSACPose_root=args.RANSACPose_root, baninsmap=args.baninsmap)
     eval_sampler = torch.utils.data.distributed.DistributedSampler(eval_dataset) if args.distributed else None
-    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=True, sampler=eval_sampler)
+    eval_loader = data.DataLoader(eval_dataset, batch_size=1, pin_memory=True, num_workers=3, drop_last=False, sampler=eval_sampler)
 
     print("Test splits contain %d images" % (eval_dataset.__len__()))
 
@@ -171,7 +203,6 @@ def train(gpu, ngpus_per_node, args):
         group = dist.new_group([i for i in range(ngpus_per_node)])
 
     validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=False)
-    validate_kitti(model.module, args, eval_loader, None, group, None, isdeepv2d=True)
     return
 
 
@@ -202,6 +233,8 @@ if __name__ == '__main__':
     parser.add_argument('--angz_range', type=float, default=0.01)
     parser.add_argument('--num_layers', type=int, default=50)
     parser.add_argument('--num_deges', type=int, default=32)
+    parser.add_argument('--maxlogscale', type=float, default=1.5)
+    parser.add_argument('--baninsmap', action='store_true')
 
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
@@ -212,10 +245,13 @@ if __name__ == '__main__':
     parser.add_argument('--semantics_root', type=str)
     parser.add_argument('--depth_root', type=str)
     parser.add_argument('--depthvlsgt_root', type=str)
-    parser.add_argument('--prediction_root', type=str)
+    parser.add_argument('--prediction_root', type=str, default=None)
     parser.add_argument('--deepv2dpred_root', type=str)
+    parser.add_argument('--mdPred_root', type=str)
+    parser.add_argument('--initbymD', action='store_true')
     parser.add_argument('--ins_root', type=str)
     parser.add_argument('--logroot', type=str)
+    parser.add_argument('--RANSACPose_root', type=str)
     parser.add_argument('--num_workers', type=int, default=12)
 
     parser.add_argument('--distributed', default=True, type=bool)
